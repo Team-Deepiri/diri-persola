@@ -40,3 +40,6 @@ ENV/
 
 # OS files
 .DS_Store
+
+# Keep poetry lock
+!poetry.lock
