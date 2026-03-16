@@ -1,6 +1,6 @@
 # Deepiri Persola
 
-Personalized Agentic Framework - Create AI agents with customizable personalities.
+Agentic Personality Framework - Create AI agents with customizable personalities.
 
 ## Features
 
