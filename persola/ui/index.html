@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Persola - Persona Tuning</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --bg-primary: #0f0f0f;
+            --bg-secondary: #1a1a1a;
+            --bg-tertiary: #252525;
+            --bg-card: #1e1e1e;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a0a0;
+            --text-muted: #666666;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --accent-soft: rgba(99, 102, 241, 0.1);
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --border: #333333;
+            --border-light: #404040;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        
+        .app {
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        .sidebar {
+            width: 260px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--accent);
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), #a855f7);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+        }
+        
+        .nav-section {
+            margin-bottom: 24px;
+        }
+        
+        .nav-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+        
+        .nav-item {
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--text-secondary);
+            transition: all 0.2s;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }
+        
+        .nav-item:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+        
+        .nav-item.active {
+            background: var(--accent-soft);
+            color: var(--accent);
+        }
+        
+        .main-content {
+            flex: 1;
+            margin-left: 260px;
+            padding: 30px;
+            max-width: 1400px;
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            font-weight: 600;
+        }
+        
+        .header-actions {
+            display: flex;
+            gap: 12px;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+        
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+        
+        .btn-secondary:hover {
+            background: var(--border-light);
+        }
+        
+        .panels-container {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 24px;
+        }
+        
+        .panel {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid var(--border);
+        }
+        
+        .panel-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .panel-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        
+        .panel-creativity .panel-icon { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+        .panel-personality .panel-icon { background: linear-gradient(135deg, #ec4899, #8b5cf6); }
+        .panel-thinking .panel-icon { background: linear-gradient(135deg, #06b6d4, #3b82f6); }
+        .panel-reliability .panel-icon { background: linear-gradient(135deg, #10b981, #14b8a6); }
+        
+        .panel-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        
+        .panel-subtitle {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        
+        .knob {
+            margin-bottom: 20px;
+        }
+        
+        .knob:last-child {
+            margin-bottom: 0;
+        }
+        
+        .knob-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        
+        .knob-label {
+            font-size: 14px;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+        
+        .knob-value {
+            font-size: 13px;
+            color: var(--accent);
+            font-weight: 600;
+            background: var(--accent-soft);
+            padding: 2px 8px;
+            border-radius: 4px;
+            min-width: 50px;
+            text-align: center;
+        }
+        
+        .knob-slider {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: var(--bg-tertiary);
+            -webkit-appearance: none;
+            appearance: none;
+            cursor: pointer;
+        }
+        
+        .knob-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: var(--accent);
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+            transition: transform 0.2s;
+        }
+        
+        .knob-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+        }
+        
+        .knob-description {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+        
+        .presets-section {
+            margin-bottom: 30px;
+        }
+        
+        .presets-grid {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 16px;
+        }
+        
+        .preset-btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+        
+        .preset-btn:hover {
+            background: var(--accent-soft);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        
+        .preset-btn.active {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+        
+        .persona-name-input {
+            width: 100%;
+            padding: 12px 16px;
+            border-radius: 8px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            font-size: 16px;
+            font-weight: 500;
+            margin-bottom: 16px;
+        }
+        
+        .persona-name-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        .persona-description-input {
+            width: 100%;
+            padding: 12px 16px;
+            border-radius: 8px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-bottom: 24px;
+            resize: vertical;
+            min-height: 60px;
+        }
+        
+        .persona-description-input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+        
+        .save-indicator {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        
+        .save-indicator.visible {
+            opacity: 1;
+        }
+        
+        .save-indicator.success {
+            border-color: var(--success);
+            color: var(--success);
+        }
+        
+        .system-prompt-preview {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 24px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .system-prompt-preview h4 {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+        }
+        
+        .system-prompt-preview pre {
+            font-size: 13px;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+            font-family: 'Inter', sans-serif;
+            line-height: 1.6;
+        }
+        
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s;
+        }
+        
+        .modal-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+        
+        .modal {
+            background: var(--bg-card);
+            border-radius: 16px;
+            padding: 24px;
+            width: 90%;
+            max-width: 500px;
+            border: 1px solid var(--border);
+        }
+        
+        .modal h3 {
+            font-size: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+        
+        @media (max-width: 1200px) {
+            .panels-container {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon">P</div>
+                Persola
+            </div>
+            
+            <div class="nav-section">
+                <div class="nav-title">Persona</div>
+                <div class="nav-item active" onclick="showView('tuning')">
+                    <span>🎛️</span> Tuning Lab
+                </div>
+                <div class="nav-item" onclick="showView('presets')">
+                    <span>📋</span> Presets
+                </div>
+                <div class="nav-item" onclick="showView('agents')">
+                    <span>🤖</span> Agents
+                </div>
+            </div>
+            
+            <div class="nav-section">
+                <div class="nav-title">Actions</div>
+                <div class="nav-item" onclick="showSystemPrompt()">
+                    <span>📄</span> Preview Prompt
+                </div>
+                <div class="nav-item" onclick="openSaveModal()">
+                    <span>💾</span> Save Persona
+                </div>
+                <div class="nav-item" onclick="loadPersonas()">
+                    <span>📂</span> Load Persona
+                </div>
+            </div>
+        </aside>
+        
+        <main class="main-content">
+            <div class="header">
+                <h1>Tuning Lab</h1>
+                <div class="header-actions">
+                    <button class="btn btn-secondary" onclick="resetToDefault()">Reset</button>
+                    <button class="btn btn-primary" onclick="openSaveModal()">Save Persona</button>
+                </div>
+            </div>
+            
+            <div class="presets-section">
+                <div class="section-title">Quick Presets</div>
+                <div class="presets-grid" id="presetsGrid"></div>
+            </div>
+            
+            <div class="section-title">Persona Details</div>
+            <input type="text" class="persona-name-input" id="personaName" placeholder="Enter persona name..." value="My Assistant">
+            <textarea class="persona-description-input" id="personaDescription" placeholder="Describe your persona...">A helpful and versatile AI assistant</textarea>
+            
+            <div class="panels-container" id="panelsContainer"></div>
+            
+            <div class="system-prompt-preview" id="systemPromptPreview" style="display: none;">
+                <h4>Generated System Prompt</h4>
+                <pre id="systemPromptContent"></pre>
+            </div>
+        </main>
+    </div>
+    
+    <div class="save-indicator" id="saveIndicator">
+        <span>✓</span> Saved
+    </div>
+    
+    <div class="modal-overlay" id="saveModal">
+        <div class="modal">
+            <h3>Save Persona</h3>
+            <input type="text" class="persona-name-input" id="savePersonaName" placeholder="Persona name">
+            <textarea class="persona-description-input" id="savePersonaDescription" placeholder="Description"></textarea>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeSaveModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="savePersona()">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const panels = [
+            {
+                id: 'creativity',
+                title: 'Creativity',
+                subtitle: 'Communication style',
+                icon: '✨',
+                knobs: [
+                    { key: 'creativity', label: 'Creativity', desc: 'How creative and imaginative responses are' },
+                    { key: 'humor', label: 'Humor', desc: 'Use of humor in responses' },
+                    { key: 'formality', label: 'Formality', desc: 'Formality level of communication' },
+                    { key: 'verbosity', label: 'Verbosity', desc: 'Length and detail of responses' },
+                    { key: 'empathy', label: 'Empathy', desc: 'Emotional understanding and acknowledgment' },
+                    { key: 'confidence', label: 'Confidence', desc: 'Certainty and assertiveness in responses' }
+                ]
+            },
+            {
+                id: 'personality',
+                title: 'Personality',
+                subtitle: 'Behavioral traits',
+                icon: '👤',
+                knobs: [
+                    { key: 'openness', label: 'Openness', desc: 'Receptivity to new ideas and experiences' },
+                    { key: 'conscientiousness', label: 'Conscientiousness', desc: 'Organization and dependability' },
+                    { key: 'extraversion', label: 'Extraversion', desc: 'Sociability and energy in interactions' },
+                    { key: 'agreeableness', label: 'Agreeableness', desc: 'Cooperation and trustworthiness' },
+                    { key: 'neuroticism', label: 'Neuroticism', desc: 'Emotional stability vs reactivity' }
+                ]
+            },
+            {
+                id: 'thinking',
+                title: 'Thinking',
+                subtitle: 'Reasoning style',
+                icon: '🧠',
+                knobs: [
+                    { key: 'reasoning_depth', label: 'Reasoning Depth', desc: 'Depth of analytical thinking' },
+                    { key: 'step_by_step', label: 'Step-by-Step', desc: 'Structured logical approach' },
+                    { key: 'creativity_in_reasoning', label: 'Creative Reasoning', desc: 'Novel approaches to problem solving' },
+                    { key: 'synthetics', label: 'Synthesis', desc: 'Combining ideas from multiple sources' },
+                    { key: 'abstraction', label: 'Abstraction', desc: 'Working with abstract concepts' },
+                    { key: 'patterns', label: 'Pattern Recognition', desc: 'Identifying patterns in information' }
+                ]
+            },
+            {
+                id: 'reliability',
+                title: 'Reliability',
+                subtitle: 'Accuracy & trust',
+                icon: '🎯',
+                knobs: [
+                    { key: 'accuracy', label: 'Accuracy', desc: 'Factual correctness of responses', default: 0.8 },
+                    { key: 'reliability', label: 'Reliability', desc: 'Consistency of response quality', default: 0.8 },
+                    { key: 'caution', label: 'Caution', desc: 'Carefulness in uncertain situations' },
+                    { key: 'consistency', label: 'Consistency', desc: 'Uniformity in behavior and responses', default: 0.8 },
+                    { key: 'self_correction', label: 'Self-Correction', desc: 'Ability to identify and fix errors' },
+                    { key: 'transparency', label: 'Transparency', desc: 'Openness about limitations and uncertainty' }
+                ]
+            }
+        ];
+
+        const presets = [
+            { id: 'default', name: 'Default' },
+            { id: 'creative', name: 'Creative' },
+            { id: 'analytical', name: 'Analytical' },
+            { id: 'friendly', name: 'Friendly' },
+            { id: 'professional', name: 'Professional' },
+            { id: 'casual', name: 'Casual' },
+            { id: 'technical', name: 'Technical' },
+            { id: 'educational', name: 'Educational' }
+        ];
+
+        let knobs = {};
+
+        function init() {
+            knobs = {
+                creativity: 0.5, humor: 0.5, formality: 0.5, verbosity: 0.5, empathy: 0.5, confidence: 0.5,
+                openness: 0.5, conscientiousness: 0.5, extraversion: 0.5, agreeableness: 0.5, neuroticism: 0.5,
+                reasoning_depth: 0.5, step_by_step: 0.5, creativity_in_reasoning: 0.5, synthetics: 0.5, abstraction: 0.5, patterns: 0.5,
+                accuracy: 0.8, reliability: 0.8, caution: 0.5, consistency: 0.8, self_correction: 0.5, transparency: 0.5
+            };
+            renderPresets();
+            renderPanels();
+        }
+
+        function renderPresets() {
+            const grid = document.getElementById('presetsGrid');
+            grid.innerHTML = presets.map(p => 
+                `<button class="preset-btn" onclick="applyPreset('${p.id}')">${p.name}</button>`
+            ).join('');
+        }
+
+        function renderPanels() {
+            const container = document.getElementById('panelsContainer');
+            container.innerHTML = panels.map(panel => `
+                <div class="panel panel-${panel.id}">
+                    <div class="panel-header">
+                        <div class="panel-icon">${panel.icon}</div>
+                        <div>
+                            <div class="panel-title">${panel.title}</div>
+                            <div class="panel-subtitle">${panel.subtitle}</div>
+                        </div>
+                    </div>
+                    ${panel.knobs.map(knob => renderKnob(knob)).join('')}
+                </div>
+            `).join('');
+        }
+
+        function renderKnob(knob) {
+            const value = knobs[knob.key] !== undefined ? knobs[knob.key] : (knob.default || 0.5);
+            return `
+                <div class="knob">
+                    <div class="knob-header">
+                        <span class="knob-label">${knob.label}</span>
+                        <span class="knob-value" id="value-${knob.key}">${value.toFixed(2)}</span>
+                    </div>
+                    <input type="range" class="knob-slider" id="slider-${knob.key}"
+                        min="0" max="1" step="0.05" value="${value}"
+                        oninput="updateKnob('${knob.key}', this.value)">
+                    <div class="knob-description">${knob.desc}</div>
+                </div>
+            `;
+        }
+
+        function updateKnob(key, value) {
+            knobs[key] = parseFloat(value);
+            document.getElementById(`value-${key}`).textContent = parseFloat(value).toFixed(2);
+        }
+
+        function applyPreset(presetId) {
+            fetch(`/api/v1/presets`)
+                .then(r => r.json())
+                .then(data => {
+                    if (data.presets && data.presets[presetId]) {
+                        knobs = { ...data.presets[presetId].knobs };
+                        document.getElementById('personaName').value = data.presets[presetId].name;
+                        document.getElementById('personaDescription').value = data.presets[presetId].description;
+                        renderPanels();
+                    }
+                });
+        }
+
+        function resetToDefault() {
+            knobs = {
+                creativity: 0.5, humor: 0.5, formality: 0.5, verbosity: 0.5, empathy: 0.5, confidence: 0.5,
+                openness: 0.5, conscientiousness: 0.5, extraversion: 0.5, agreeableness: 0.5, neuroticism: 0.5,
+                reasoning_depth: 0.5, step_by_step: 0.5, creativity_in_reasoning: 0.5, synthetics: 0.5, abstraction: 0.5, patterns: 0.5,
+                accuracy: 0.8, reliability: 0.8, caution: 0.5, consistency: 0.8, self_correction: 0.5, transparency: 0.5
+            };
+            document.getElementById('personaName').value = 'My Assistant';
+            document.getElementById('personaDescription').value = 'A helpful and versatile AI assistant';
+            renderPanels();
+        }
+
+        function showSystemPrompt() {
+            const profile = {
+                name: document.getElementById('personaName').value,
+                description: document.getElementById('personaDescription').value,
+                ...knobs,
+                model: 'llama3:8b',
+                temperature: 0.7,
+                max_tokens: 2000
+            };
+            
+            fetch('/api/v1/tuning/knobs')
+                .then(r => r.json())
+                .then(() => {
+                    fetch('/api/v1/personas', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(profile)
+                    })
+                    .then(r => r.json())
+                    .then(persona => {
+                        return fetch(`/api/v1/personas/${persona.id}/system-prompt`);
+                    })
+                    .then(r => r.json())
+                    .then(data => {
+                        document.getElementById('systemPromptContent').textContent = data.system_prompt;
+                        document.getElementById('systemPromptPreview').style.display = 'block';
+                    });
+                });
+        }
+
+        function openSaveModal() {
+            document.getElementById('savePersonaName').value = document.getElementById('personaName').value;
+            document.getElementById('savePersonaDescription').value = document.getElementById('personaDescription').value;
+            document.getElementById('saveModal').classList.add('visible');
+        }
+
+        function closeSaveModal() {
+            document.getElementById('saveModal').classList.remove('visible');
+        }
+
+        function savePersona() {
+            const profile = {
+                name: document.getElementById('savePersonaName').value,
+                description: document.getElementById('savePersonaDescription').value,
+                ...knobs,
+                model: 'llama3:8b',
+                temperature: 0.7,
+                max_tokens: 2000
+            };
+            
+            fetch('/api/v1/personas', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(profile)
+            })
+            .then(r => r.json())
+            .then(() => {
+                closeSaveModal();
+                showSaveIndicator();
+            });
+        }
+
+        function showSaveIndicator() {
+            const indicator = document.getElementById('saveIndicator');
+            indicator.classList.add('visible', 'success');
+            setTimeout(() => indicator.classList.remove('visible', 'success'), 2000);
+        }
+
+        function loadPersonas() {
+            fetch('/api/v1/personas')
+                .then(r => r.json())
+                .then(personas => {
+                    if (personas.length === 0) {
+                        alert('No saved personas found');
+                        return;
+                    }
+                    const persona = personas[0];
+                    document.getElementById('personaName').value = persona.name;
+                    document.getElementById('personaDescription').value = persona.description || '';
+                    knobs = persona;
+                    renderPanels();
+                });
+        }
+
+        function showView(view) {
+            document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+            event.target.closest('.nav-item').classList.add('active');
+        }
+
+        init();
+    </script>
+</body>
+</html>
