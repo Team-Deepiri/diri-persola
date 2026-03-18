@@ -104,6 +104,121 @@ persola/
 └── ui/            # Web UI
 ```
 
+## Database Configuration
+
+Persola uses PostgreSQL with SQLAlchemy for data persistence. The database stores personas, agents, sessions, and messages.
+
+### Standalone Setup
+
+For standalone operation, Persola includes its own PostgreSQL database:
+
+```bash
+# Start database
+docker-compose up -d persola-db
+
+# Run migrations
+docker-compose run --rm persola-api alembic upgrade head
+```
+
+### Platform Integration
+
+When running as part of the Deepiri platform, Persola uses the shared `persola-db` service.
+
+## Running Migrations
+
+Database migrations are handled by Alembic:
+
+```bash
+# Check current migration status
+alembic current
+
+# Generate new migration (after schema changes)
+alembic revision --autogenerate -m "description"
+
+# Apply migrations
+alembic upgrade head
+
+# Rollback
+alembic downgrade -1
+```
+
+### Docker Migration
+
+```bash
+# Run migrations in container
+docker-compose run --rm persola-api alembic upgrade head
+
+# Or use the migration container
+docker-compose run --rm persola-migrations
+```
+
+## Starting the Application
+
+### Standalone Mode
+
+Run Persola independently:
+
+```bash
+# Start all services
+docker-compose up -d
+
+# Or use the startup script
+./scripts/start.sh
+```
+
+This starts:
+- `persola-db` (PostgreSQL on port 5433)
+- `persola-redis` (Redis on port 6379)
+- `persola-api` (API on port 8002)
+- `persola-ui` (UI on port 3000)
+
+### Platform Mode
+
+When running within the Deepiri platform:
+
+```bash
+# From deepiri-platform directory
+docker-compose -f docker-compose.dev.yml up -d persola-db persola persola-ui
+
+# Or use Persola's startup script
+cd diri-persola && ./scripts/start.sh
+```
+
+## Environment Variables
+
+Configure Persola through environment variables:
+
+### Database
+- `DATABASE_URL` - PostgreSQL connection string
+- `POSTGRES_HOST` - Database host (default: persola-db)
+- `POSTGRES_PORT` - Database port (default: 5432)
+- `POSTGRES_USER` - Database user (default: persola)
+- `POSTGRES_PASSWORD` - Database password
+- `POSTGRES_DB` - Database name (default: persola)
+
+### Server
+- `HOST` - Server host (default: 0.0.0.0)
+- `PORT` - Server port (default: 8002)
+- `DEBUG` - Enable debug mode (default: false)
+
+### LLM Configuration
+- `OLLAMA_BASE_URL` - Ollama server URL (default: http://ollama:11434)
+- `DEFAULT_MODEL` - Default model (default: llama3:8b)
+- `DEFAULT_PROVIDER` - Default provider (default: ollama)
+
+### External APIs
+- `OPENAI_API_KEY` - OpenAI API key
+- `ANTHROPIC_API_KEY` - Anthropic API key
+
+### Cyrex Integration
+- `CYREX_URL` - Cyrex service URL (default: http://cyrex:8000)
+- `CYREX_API_KEY` - Cyrex API key
+
+### Redis (Optional)
+- `REDIS_HOST` - Redis host (default: redis)
+- `REDIS_PORT` - Redis port (default: 6379)
+- `REDIS_PASSWORD` - Redis password
+
 ## License
 
 MIT

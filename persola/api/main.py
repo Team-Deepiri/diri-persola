@@ -7,6 +7,7 @@ from typing import Dict, Any, List, Optional
 import uuid
 import os
 import logging
+from contextlib import asynccontextmanager
 
 from ..models import (
     PersonaProfile, AgentConfig, KNOB_DEFINITIONS, 
@@ -14,14 +15,26 @@ from ..models import (
 )
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
+from persola.db.database import get_db, init_db, close_db
+from persola.db.repositories import PersonaRepository, AgentRepository, SessionRepository, MessageRepository
+from persola.db.services import PersonaService, AgentService, AnalyticsService
+from persola.db.schemas import PersonaCreate, PersonaUpdate, PersonaResponse, AgentCreate, AgentUpdate, AgentResponse, SessionResponse, MessageResponse
+from fastapi import Depends
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("persola.api")
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    yield
+    await close_db()
+
 app = FastAPI(
     title="Persola API",
     description="Personalized Agentic Framework API",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
 
 app.add_middleware(
@@ -32,9 +45,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-engine = PersonaEngine()
-personas_db: Dict[str, PersonaProfile] = {}
-agents_db: Dict[str, AgentConfig] = {}
+# Dependency injection
+async def get_persona_service(db=Depends(get_db)) -> PersonaService:
+    return PersonaService(db)
+
+async def get_agent_service(db=Depends(get_db)) -> AgentService:
+    return AgentService(db)
+
+async def get_analytics_service(db=Depends(get_db)) -> AnalyticsService:
+    return AnalyticsService(db)
+
+async def get_session_repo(db=Depends(get_db)) -> SessionRepository:
+    return SessionRepository(db)
+
+async def get_message_repo(db=Depends(get_db)) -> MessageRepository:
+    return MessageRepository(db)
 
 
 @app.get("/")
@@ -76,80 +101,82 @@ async def validate_knobs(knobs: Dict[str, float]):
     return engine.validate_knobs(knobs)
 
 
-@app.post("/api/v1/personas", response_model=PersonaProfile)
-async def create_persona(persona: PersonaProfile):
-    if not persona.id:
-        persona.id = f"persona_{uuid.uuid4().hex[:8]}"
-    personas_db[persona.id] = persona
-    return persona
+@app.post("/api/v1/personas", response_model=PersonaResponse)
+async def create_persona(persona: PersonaCreate, service: PersonaService = Depends(get_persona_service)):
+    model = await service.create_persona(persona)
+    return PersonaResponse.model_validate(model)
 
 
-@app.get("/api/v1/personas", response_model=List[PersonaProfile])
-async def list_personas():
-    return list(personas_db.values())
+@app.get("/api/v1/personas", response_model=List[PersonaResponse])
+async def list_personas(service: PersonaService = Depends(get_persona_service)):
+    models = await service.list_personas()
+    return [PersonaResponse.model_validate(model) for model in models]
 
 
-@app.get("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
-async def get_persona(persona_id: str):
-    if persona_id not in personas_db:
+@app.get("/api/v1/personas/{persona_id}", response_model=PersonaResponse)
+async def get_persona(persona_id: str, service: PersonaService = Depends(get_persona_service)):
+    model = await service.get_persona(persona_id)
+    if not model:
         raise HTTPException(status_code=404, detail="Persona not found")
-    return personas_db[persona_id]
+    return PersonaResponse.model_validate(model)
 
 
-@app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
-async def update_persona(persona_id: str, persona: PersonaProfile):
-    if persona_id not in personas_db:
+@app.put("/api/v1/personas/{persona_id}", response_model=PersonaResponse)
+async def update_persona(persona_id: str, persona: PersonaUpdate, service: PersonaService = Depends(get_persona_service)):
+    model = await service.update_persona(persona_id, persona)
+    if not model:
         raise HTTPException(status_code=404, detail="Persona not found")
-    persona.id = persona_id
-    personas_db[persona_id] = persona
-    return persona
+    return PersonaResponse.model_validate(model)
 
 
 @app.delete("/api/v1/personas/{persona_id}")
-async def delete_persona(persona_id: str):
-    if persona_id not in personas_db:
+async def delete_persona(persona_id: str, service: PersonaService = Depends(get_persona_service)):
+    deleted = await service.delete_persona(persona_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail="Persona not found")
-    del personas_db[persona_id]
     return {"deleted": True}
 
 
-class BlendRequest(BaseModel):
-    persona1_id: str
-    persona2_id: str
-    ratio: float = 0.5
-
-
-@app.post("/api/v1/personas/blend", response_model=PersonaProfile)
-async def blend_personas(request: BlendRequest):
-    if request.persona1_id not in personas_db:
+@app.post("/api/v1/personas/blend", response_model=PersonaResponse)
+async def blend_personas(request: BlendRequest, service: PersonaService = Depends(get_persona_service)):
+    persona1 = await service.get_persona(request.persona1_id)
+    if not persona1:
         raise HTTPException(status_code=404, detail="Persona 1 not found")
-    if request.persona2_id not in personas_db:
+    persona2 = await service.get_persona(request.persona2_id)
+    if not persona2:
         raise HTTPException(status_code=404, detail="Persona 2 not found")
     
-    blended = engine.blend_personas(
-        personas_db[request.persona1_id],
-        personas_db[request.persona2_id],
-        request.ratio
-    )
-    blended.id = f"persona_{uuid.uuid4().hex[:8]}"
-    personas_db[blended.id] = blended
-    return blended
+    # Convert to PersonaProfile for engine
+    from ..models import PersonaProfile
+    p1 = PersonaProfile.model_validate(persona1.__dict__)
+    p2 = PersonaProfile.model_validate(persona2.__dict__)
+    
+    engine = PersonaEngine()
+    blended = engine.blend_personas(p1, p2, request.ratio)
+    
+    # Create new persona in db
+    create_data = PersonaCreate(**blended.__dict__)
+    model = await service.create_persona(create_data)
+    return PersonaResponse.model_validate(model)
 
 
 @app.get("/api/v1/personas/{persona_id}/system-prompt")
-async def get_system_prompt(persona_id: str):
-    if persona_id not in personas_db:
+async def get_system_prompt(persona_id: str, service: PersonaService = Depends(get_persona_service)):
+    model = await service.get_persona(persona_id)
+    if not model:
         raise HTTPException(status_code=404, detail="Persona not found")
-    persona = personas_db[persona_id]
+    
+    from ..models import PersonaProfile
+    persona = PersonaProfile.model_validate(model.__dict__)
+    engine = PersonaEngine()
     prompt = engine.build_system_prompt(persona)
     return {"system_prompt": prompt}
 
 
-@app.get("/api/v1/personas/{persona_id}/sampling")
-async def get_sampling_params(persona_id: str):
-    if persona_id not in personas_db:
-        raise HTTPException(status_code=404, detail="Persona not found")
-    return engine.get_sampling_params(personas_db[persona_id])
+@app.get("/api/v1/sessions/{session_id}/messages", response_model=List[MessageResponse])
+async def get_session_messages(session_id: str, repo: MessageRepository = Depends(get_message_repo)):
+    models = await repo.get_messages_for_session(session_id)
+    return [MessageResponse.model_validate(model) for model in models]
 
 
 @app.get("/api/v1/presets")
@@ -166,49 +193,53 @@ async def get_presets():
     }
 
 
-class ApplyPresetRequest(BaseModel):
-    persona_id: str
-    preset: PresetName
-
-
 @app.post("/api/v1/presets/{preset}/apply")
-async def apply_preset(preset: PresetName, request: ApplyPresetRequest):
-    if request.persona_id not in personas_db:
+async def apply_preset(preset: PresetName, request: ApplyPresetRequest, service: PersonaService = Depends(get_persona_service)):
+    model = await service.get_persona(request.persona_id)
+    if not model:
         raise HTTPException(status_code=404, detail="Persona not found")
     
+    from ..models import PersonaProfile
+    persona = PersonaProfile.model_validate(model.__dict__)
+    engine = PersonaEngine()
     preset_profile = engine.apply_preset(preset)
-    existing = personas_db[request.persona_id]
     
-    existing.name = preset_profile.name
-    existing.description = preset_profile.description
-    existing.set_knobs(preset_profile.get_knobs())
+    persona.name = preset_profile.name
+    persona.description = preset_profile.description
+    persona.set_knobs(preset_profile.get_knobs())
     
-    return existing
+    update_data = PersonaUpdate(**persona.__dict__)
+    updated = await service.update_persona(request.persona_id, update_data)
+    return PersonaResponse.model_validate(updated)
 
 
-@app.post("/api/v1/agents", response_model=AgentConfig)
-async def create_agent(agent: AgentConfig):
-    if not agent.agent_id:
-        agent.agent_id = f"agent_{uuid.uuid4().hex[:8]}"
+@app.post("/api/v1/agents", response_model=AgentResponse)
+async def create_agent(agent: AgentCreate, service: AgentService = Depends(get_agent_service), persona_service: PersonaService = Depends(get_persona_service)):
+    # If persona_id, build system_prompt
+    if agent.persona_id:
+        persona = await persona_service.get_persona(agent.persona_id)
+        if persona:
+            from ..models import PersonaProfile
+            p = PersonaProfile.model_validate(persona.__dict__)
+            engine = PersonaEngine()
+            agent.system_prompt = engine.build_system_prompt(p)
     
-    if agent.persona_id and agent.persona_id in personas_db:
-        persona = personas_db[agent.persona_id]
-        agent.system_prompt = engine.build_system_prompt(persona)
-    
-    agents_db[agent.agent_id] = agent
-    return agent
+    model = await service.create_agent(agent)
+    return AgentResponse.model_validate(model)
 
 
-@app.get("/api/v1/agents", response_model=List[AgentConfig])
-async def list_agents():
-    return list(agents_db.values())
+@app.get("/api/v1/agents", response_model=List[AgentResponse])
+async def list_agents(service: AgentService = Depends(get_agent_service)):
+    models = await service.list_agents()
+    return [AgentResponse.model_validate(model) for model in models]
 
 
-@app.get("/api/v1/agents/{agent_id}", response_model=AgentConfig)
-async def get_agent(agent_id: str):
-    if agent_id not in agents_db:
+@app.get("/api/v1/agents/{agent_id}", response_model=AgentResponse)
+async def get_agent(agent_id: str, service: AgentService = Depends(get_agent_service)):
+    model = await service.get_agent(agent_id)
+    if not model:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return agents_db[agent_id]
+    return AgentResponse.model_validate(model)
 
 
 class InvokeRequest(BaseModel):
@@ -250,11 +281,12 @@ async def get_provider_status():
 
 
 @app.post("/api/v1/agents/{agent_id}/invoke")
-async def invoke_agent(agent_id: str, request: InvokeRequest):
-    if agent_id not in agents_db:
+async def invoke_agent(agent_id: str, request: InvokeRequest, service: AgentService = Depends(get_agent_service)):
+    model = await service.get_agent(agent_id)
+    if not model:
         raise HTTPException(status_code=404, detail="Agent not found")
     
-    agent = agents_db[agent_id]
+    agent = AgentConfig.model_validate(model.__dict__)
     
     if not HAS_CYREX:
         return {
@@ -286,8 +318,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest):
                 "provider": provider_type,
             }
         
-        profile = personas_db.get(agent.persona_id) if agent.persona_id else None
-        system_prompt = agent.system_prompt or (engine.build_system_prompt(profile) if profile else "")
+        system_prompt = agent.system_prompt or ""
         
         full_prompt = f"{system_prompt}\n\nUser: {request.message}\n\nAssistant:" if system_prompt else request.message
         
