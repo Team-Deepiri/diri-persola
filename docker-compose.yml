@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  persola-db:
+    image: postgres:15
+    container_name: persola-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: persola
+    ports:
+      - "5433:5432"
+    volumes:
+      - persola-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d persola"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  persola-redis:
+    image: redis:7-alpine
+    container_name: persola-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - persola-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  persola:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: persola
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@persola-db:5432/persola
+      REDIS_URL: redis://persola-redis:6379
+    ports:
+      - "8002:8002"
+    depends_on:
+      persola-db:
+        condition: service_healthy
+      persola-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  persola-ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: persola-ui
+    ports:
+      - "3000:3000"
+    depends_on:
+      persola:
+        condition: service_healthy
+
+volumes:
+  persola-db-data:
+  persola-redis-data:
