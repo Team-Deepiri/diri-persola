@@ -8,12 +8,12 @@ keywords = ["ai", "agents", "personalization", "llm", "cyrex", "helox"]
 license = "MIT"
 package-mode = false
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
+	"Development Status :: 3 - Alpha",
+	"Intended Audience :: Developers",
+	"License :: OSI Approved :: MIT License",
+	"Programming Language :: Python :: 3.10",
+	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.12",
 ]
 
 [tool.poetry.dependencies]
@@ -29,6 +29,9 @@ httpx = "^0.26.0"
 python-multipart = "^0.0.6"
 jinja2 = "^3.1.0"
 tenacity = "^8.2.0"
+alembic = "^1.13.0"
+psycopg2-binary = "^2.9.9"
+greenlet = "^3.0.0"
 
 [tool.poetry.extras]
 dev = ["pytest", "pytest-asyncio", "pytest-cov", "black", "ruff", "mypy"]
