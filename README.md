@@ -11,6 +11,15 @@ Agentic Personality Framework - Create AI agents with customizable personalities
 - **Persona Blending** - Combine personas
 - **Real-time Playground** - Test and iterate
 
+The goal of this framework is to create agents who don’t just execute instructions—they reason, reflect, and act as if they have morals that are going to be completely CHOSEN by them.
+
+This should be working right alongside Cyrex, which is the agentic runtime engine, but also cna work standalone. 
+
+Integrates with RAG + vector db (Milvus or pgvector depending on what service), inference, and personalization, so the agents can recall context, learn preferences, and interact more naturally.
+
+Could also leverage UQE for quantum-simulated reasoning, if you want probabilistic or parallelized decision-making baked into the agent’s “thought process.”
+
+
 ## Installation
 
 ```bash
