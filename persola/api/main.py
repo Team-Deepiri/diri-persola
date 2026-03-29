@@ -17,7 +17,7 @@ from ..models import (
     PresetName,
 )
 from ..db.database import check_db_health, close_db, get_db, init_db
-from ..db.models import AgentModel, MessageModel, PersonaModel
+from ..db.models import AgentModel, PersonaModel
 from ..db.repositories import AgentRepository, MessageRepository, PersonaRepository, SessionRepository
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
