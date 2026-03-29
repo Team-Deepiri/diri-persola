@@ -1,8 +1,11 @@
-from fastapi import FastAPI, HTTPException
+from contextlib import asynccontextmanager
+
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, List, Optional
 import uuid
 import os
@@ -14,14 +17,28 @@ from ..models import (
 )
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
+from ..db import get_db, init_db, close_db, PersonaRepo, AgentRepo
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("persola.api")
 
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    """Startup: create tables. Shutdown: dispose connection pool."""
+    logger.info("Initialising database …")
+    await init_db()
+    logger.info("Database ready.")
+    yield
+    logger.info("Shutting down database …")
+    await close_db()
+
+
 app = FastAPI(
     title="Persola API",
     description="Personalized Agentic Framework API",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -33,8 +50,6 @@ app.add_middleware(
 )
 
 engine = PersonaEngine()
-personas_db: Dict[str, PersonaProfile] = {}
-agents_db: Dict[str, AgentConfig] = {}
 
 
 @app.get("/")
@@ -49,6 +64,18 @@ async def health():
         "cyrex_available": HAS_CYREX,
         "llm_provider": os.getenv("OPENAI_API_KEY") and "openai" or os.getenv("ANTHROPIC_API_KEY") and "anthropic" or "ollama",
     }
+
+
+@app.get("/health/db")
+async def health_db(db: AsyncSession = Depends(get_db)):
+    """Check database connectivity."""
+    try:
+        from sqlalchemy import text
+        result = await db.execute(text("SELECT 1"))
+        result.scalar()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database unreachable: {e}")
 
 
 @app.get("/api/v1/tuning/knobs")
@@ -77,39 +104,44 @@ async def validate_knobs(knobs: Dict[str, float]):
 
 
 @app.post("/api/v1/personas", response_model=PersonaProfile)
-async def create_persona(persona: PersonaProfile):
+async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
     if not persona.id:
         persona.id = f"persona_{uuid.uuid4().hex[:8]}"
-    personas_db[persona.id] = persona
-    return persona
+    repo = PersonaRepo(db)
+    return await repo.create(persona)
 
 
 @app.get("/api/v1/personas", response_model=List[PersonaProfile])
-async def list_personas():
-    return list(personas_db.values())
+async def list_personas(db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepo(db)
+    return await repo.list_all()
 
 
 @app.get("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
-async def get_persona(persona_id: str):
-    if persona_id not in personas_db:
+async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepo(db)
+    persona = await repo.get(persona_id)
+    if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    return personas_db[persona_id]
-
-
-@app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
-async def update_persona(persona_id: str, persona: PersonaProfile):
-    if persona_id not in personas_db:
-        raise HTTPException(status_code=404, detail="Persona not found")
-    persona.id = persona_id
-    personas_db[persona_id] = persona
     return persona
 
 
-@app.delete("/api/v1/personas/{persona_id}")
-async def delete_persona(persona_id: str):
-    if persona_id not in personas_db:
+@app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
+async def update_persona(persona_id: str, persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepo(db)
+    persona.id = persona_id
+    result = await repo.update(persona_id, persona)
+    if result is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    del personas_db[persona_id]
+    return result
+
+
+@app.delete("/api/v1/personas/{persona_id}")
+async def delete_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepo(db)
+    deleted = await repo.delete(persona_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Persona not found")
     return {"deleted": True}
 
 
@@ -120,36 +152,37 @@ class BlendRequest(BaseModel):
 
 
 @app.post("/api/v1/personas/blend", response_model=PersonaProfile)
-async def blend_personas(request: BlendRequest):
-    if request.persona1_id not in personas_db:
+async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepo(db)
+    p1 = await repo.get(request.persona1_id)
+    if p1 is None:
         raise HTTPException(status_code=404, detail="Persona 1 not found")
-    if request.persona2_id not in personas_db:
+    p2 = await repo.get(request.persona2_id)
+    if p2 is None:
         raise HTTPException(status_code=404, detail="Persona 2 not found")
     
-    blended = engine.blend_personas(
-        personas_db[request.persona1_id],
-        personas_db[request.persona2_id],
-        request.ratio
-    )
+    blended = engine.blend_personas(p1, p2, request.ratio)
     blended.id = f"persona_{uuid.uuid4().hex[:8]}"
-    personas_db[blended.id] = blended
-    return blended
+    return await repo.create(blended)
 
 
 @app.get("/api/v1/personas/{persona_id}/system-prompt")
-async def get_system_prompt(persona_id: str):
-    if persona_id not in personas_db:
+async def get_system_prompt(persona_id: str, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepo(db)
+    persona = await repo.get(persona_id)
+    if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    persona = personas_db[persona_id]
     prompt = engine.build_system_prompt(persona)
     return {"system_prompt": prompt}
 
 
 @app.get("/api/v1/personas/{persona_id}/sampling")
-async def get_sampling_params(persona_id: str):
-    if persona_id not in personas_db:
+async def get_sampling_params(persona_id: str, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepo(db)
+    persona = await repo.get(persona_id)
+    if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    return engine.get_sampling_params(personas_db[persona_id])
+    return engine.get_sampling_params(persona)
 
 
 @app.get("/api/v1/presets")
@@ -172,43 +205,49 @@ class ApplyPresetRequest(BaseModel):
 
 
 @app.post("/api/v1/presets/{preset}/apply")
-async def apply_preset(preset: PresetName, request: ApplyPresetRequest):
-    if request.persona_id not in personas_db:
+async def apply_preset(preset: PresetName, request: ApplyPresetRequest, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepo(db)
+    existing = await repo.get(request.persona_id)
+    if existing is None:
         raise HTTPException(status_code=404, detail="Persona not found")
     
     preset_profile = engine.apply_preset(preset)
-    existing = personas_db[request.persona_id]
-    
     existing.name = preset_profile.name
     existing.description = preset_profile.description
     existing.set_knobs(preset_profile.get_knobs())
     
-    return existing
+    result = await repo.update(request.persona_id, existing)
+    return result
 
 
 @app.post("/api/v1/agents", response_model=AgentConfig)
-async def create_agent(agent: AgentConfig):
+async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
     if not agent.agent_id:
         agent.agent_id = f"agent_{uuid.uuid4().hex[:8]}"
     
-    if agent.persona_id and agent.persona_id in personas_db:
-        persona = personas_db[agent.persona_id]
-        agent.system_prompt = engine.build_system_prompt(persona)
+    if agent.persona_id:
+        persona_repo = PersonaRepo(db)
+        persona = await persona_repo.get(agent.persona_id)
+        if persona:
+            agent.system_prompt = engine.build_system_prompt(persona)
     
-    agents_db[agent.agent_id] = agent
-    return agent
+    repo = AgentRepo(db)
+    return await repo.create(agent)
 
 
 @app.get("/api/v1/agents", response_model=List[AgentConfig])
-async def list_agents():
-    return list(agents_db.values())
+async def list_agents(db: AsyncSession = Depends(get_db)):
+    repo = AgentRepo(db)
+    return await repo.list_all()
 
 
 @app.get("/api/v1/agents/{agent_id}", response_model=AgentConfig)
-async def get_agent(agent_id: str):
-    if agent_id not in agents_db:
+async def get_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
+    repo = AgentRepo(db)
+    agent = await repo.get(agent_id)
+    if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-    return agents_db[agent_id]
+    return agent
 
 
 class InvokeRequest(BaseModel):
@@ -250,11 +289,11 @@ async def get_provider_status():
 
 
 @app.post("/api/v1/agents/{agent_id}/invoke")
-async def invoke_agent(agent_id: str, request: InvokeRequest):
-    if agent_id not in agents_db:
+async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession = Depends(get_db)):
+    agent_repo = AgentRepo(db)
+    agent = await agent_repo.get(agent_id)
+    if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-    
-    agent = agents_db[agent_id]
     
     if not HAS_CYREX:
         return {
@@ -286,7 +325,10 @@ async def invoke_agent(agent_id: str, request: InvokeRequest):
                 "provider": provider_type,
             }
         
-        profile = personas_db.get(agent.persona_id) if agent.persona_id else None
+        profile = None
+        if agent.persona_id:
+            persona_repo = PersonaRepo(db)
+            profile = await persona_repo.get(agent.persona_id)
         system_prompt = agent.system_prompt or (engine.build_system_prompt(profile) if profile else "")
         
         full_prompt = f"{system_prompt}\n\nUser: {request.message}\n\nAssistant:" if system_prompt else request.message
