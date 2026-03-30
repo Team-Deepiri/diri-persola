@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from typing import Dict, List, Optional
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -20,7 +21,8 @@ from ..db.database import check_db_health, close_db, get_db, init_db
 from ..db.models import AgentModel, PersonaModel
 from ..db.repositories import AgentRepository, MessageRepository, PersonaRepository, SessionRepository
 from ..engine import PersonaEngine
-from ..integrations.llm import get_llm_provider, HAS_CYREX
+from ..integrations.cyrex import CyrexClient, HAS_CYREX
+from ..integrations.llm import get_llm_provider
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("persola.api")
@@ -54,6 +56,7 @@ app.add_middleware(
 )
 
 engine = PersonaEngine()
+cyrex_client = CyrexClient()
 
 
 def _to_persona_profile(persona: PersonaModel) -> PersonaProfile:
@@ -491,6 +494,77 @@ async def get_provider_status(db: AsyncSession = Depends(get_db)):
         "has_cyrex": HAS_CYREX,
         "providers": providers,
     }
+
+
+def _require_cyrex_configured() -> None:
+    if cyrex_client.is_configured:
+        return
+    raise HTTPException(
+        status_code=503,
+        detail="Cyrex is not configured. Set CYREX_URL and CYREX_API_KEY.",
+    )
+
+
+@app.get("/api/v1/cyrex/status")
+async def get_cyrex_status(db: AsyncSession = Depends(get_db)):
+    if not cyrex_client.is_configured:
+        return {
+            "available": False,
+            "configured": False,
+            "base_url": None,
+        }
+
+    return {
+        "available": await cyrex_client.is_available(),
+        "configured": True,
+        "base_url": cyrex_client.base_url,
+    }
+
+
+@app.get("/api/v1/cyrex/agents")
+async def list_cyrex_agents(db: AsyncSession = Depends(get_db)):
+    _require_cyrex_configured()
+    try:
+        return {"agents": await cyrex_client.list_cyrex_agents()}
+    except Exception as e:
+        logger.error(f"Cyrex list agents error: {e}")
+        raise HTTPException(status_code=502, detail=f"Cyrex request failed: {str(e)}") from e
+
+
+@app.post("/api/v1/cyrex/sync/{persona_id}")
+async def sync_persona_to_cyrex(persona_id: str, db: AsyncSession = Depends(get_db)):
+    _require_cyrex_configured()
+
+    persona_repo = PersonaRepository(db)
+    persona = await persona_repo.get(UUID(persona_id))
+    if persona is None:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    try:
+        payload = await cyrex_client.push_persona(_to_persona_profile(persona))
+        return {
+            "persona_id": persona_id,
+            "synced": True,
+            "cyrex_response": payload,
+        }
+    except Exception as e:
+        logger.error(f"Cyrex sync error: {e}")
+        raise HTTPException(status_code=502, detail=f"Cyrex sync failed: {str(e)}") from e
+
+
+@app.post("/api/v1/cyrex/import/{cyrex_id}", response_model=PersonaProfile)
+async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(get_db)):
+    _require_cyrex_configured()
+
+    persona_repo = PersonaRepository(db)
+    try:
+        profile = await cyrex_client.pull_persona(cyrex_id)
+        created = await persona_repo.create(_to_persona_model(profile))
+        await db.commit()
+        return _to_persona_profile(created)
+    except Exception as e:
+        logger.error(f"Cyrex import error: {e}")
+        raise HTTPException(status_code=502, detail=f"Cyrex import failed: {str(e)}") from e
 
 
 @app.post("/api/v1/agents/{agent_id}/invoke")
