@@ -20,6 +20,7 @@ from ..models import (
 from ..db.database import check_db_health, close_db, get_db, init_db
 from ..db.models import AgentModel, PersonaModel
 from ..db.repositories import AgentRepository, MessageRepository, PersonaRepository, SessionRepository
+from ..db.services import PersonaService
 from ..engine import PersonaEngine
 from ..integrations.cyrex import CyrexClient, HAS_CYREX
 from ..integrations.llm import get_llm_provider
@@ -227,7 +228,7 @@ async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
 
 @app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
 async def update_persona(persona_id: str, persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+    service = PersonaService(db)
     updates = {
         "name": persona.name,
         "description": persona.description,
@@ -259,7 +260,7 @@ async def update_persona(persona_id: str, persona: PersonaProfile, db: AsyncSess
         "max_tokens": persona.max_tokens,
         "updated_at": persona.updated_at,
     }
-    updated = await repo.update(
+    updated = await service.update(
         UUID(persona_id),
         updates,
     )
@@ -308,21 +309,20 @@ async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_d
 
 @app.get("/api/v1/personas/{persona_id}/system-prompt")
 async def get_system_prompt(persona_id: str, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
-    persona = await repo.get(UUID(persona_id))
-    if persona is None:
+    service = PersonaService(db)
+    prompt = await service.get_system_prompt(UUID(persona_id))
+    if prompt is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    prompt = engine.build_system_prompt(_to_persona_profile(persona))
     return {"system_prompt": prompt}
 
 
 @app.get("/api/v1/personas/{persona_id}/sampling")
 async def get_sampling_params(persona_id: str, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
-    persona = await repo.get(UUID(persona_id))
-    if persona is None:
+    service = PersonaService(db)
+    params = await service.get_sampling_params(UUID(persona_id))
+    if params is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    return engine.get_sampling_params(_to_persona_profile(persona))
+    return params
 
 
 @app.get("/api/v1/personas/{persona_id}/export")
@@ -363,8 +363,8 @@ class ApplyPresetRequest(BaseModel):
 
 @app.post("/api/v1/presets/{preset}/apply")
 async def apply_preset(preset: PresetName, request: ApplyPresetRequest, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
-    existing = await repo.get(UUID(request.persona_id))
+    service = PersonaService(db)
+    existing = await service.get(UUID(request.persona_id))
     if existing is None:
         raise HTTPException(status_code=404, detail="Persona not found")
 
@@ -375,7 +375,7 @@ async def apply_preset(preset: PresetName, request: ApplyPresetRequest, db: Asyn
         "description": preset_profile.description,
         **preset_profile.get_knobs(),
     }
-    updated = await repo.update(existing.id, updates)
+    updated = await service.update(existing.id, updates)
     await db.commit()
     if updated is None:
         raise HTTPException(status_code=404, detail="Persona not found")

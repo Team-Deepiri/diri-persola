@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ...cache import PersonaCache
+from ...engine import PersonaEngine
+from ...models import PersonaProfile
 from ..models import PersonaModel
 from ..repositories import PersonaRepository
 
@@ -11,6 +15,44 @@ from ..repositories import PersonaRepository
 class PersonaService:
     def __init__(self, session: AsyncSession) -> None:
         self.repository = PersonaRepository(session)
+        self.engine = PersonaEngine()
+        self.cache = PersonaCache()
+
+    def _to_persona_profile(self, persona: PersonaModel) -> PersonaProfile:
+        return PersonaProfile(
+            id=str(persona.id),
+            name=persona.name,
+            description=persona.description or "",
+            created_at=persona.created_at,
+            updated_at=persona.updated_at,
+            creativity=persona.creativity,
+            humor=persona.humor,
+            formality=persona.formality,
+            verbosity=persona.verbosity,
+            empathy=persona.empathy,
+            confidence=persona.confidence,
+            openness=persona.openness,
+            conscientiousness=persona.conscientiousness,
+            extraversion=persona.extraversion,
+            agreeableness=persona.agreeableness,
+            neuroticism=persona.neuroticism,
+            reasoning_depth=persona.reasoning_depth,
+            step_by_step=persona.step_by_step,
+            creativity_in_reasoning=persona.creativity_in_reasoning,
+            synthetics=persona.synthetics,
+            abstraction=persona.abstraction,
+            patterns=persona.patterns,
+            accuracy=persona.accuracy,
+            reliability=persona.reliability,
+            caution=persona.caution,
+            consistency=persona.consistency,
+            self_correction=persona.self_correction,
+            transparency=persona.transparency,
+            model=persona.model,
+            temperature=persona.temperature,
+            max_tokens=persona.max_tokens,
+            system_prompt="",
+        )
 
     async def get(self, persona_id: UUID) -> PersonaModel | None:
         return await self.repository.get(persona_id)
@@ -19,7 +61,39 @@ class PersonaService:
         return await self.repository.create(PersonaModel(**data))
 
     async def update(self, persona_id: UUID, data: dict) -> PersonaModel | None:
-        return await self.repository.update(persona_id, data)
+        updated = await self.repository.update(persona_id, data)
+        if updated is not None:
+            await self.cache.invalidate(persona_id)
+        return updated
 
     async def delete(self, persona_id: UUID) -> bool:
-        return await self.repository.delete(persona_id)
+        deleted = await self.repository.delete(persona_id)
+        if deleted:
+            await self.cache.invalidate(persona_id)
+        return deleted
+
+    async def get_system_prompt(self, persona_id: UUID) -> str | None:
+        cached = await self.cache.get_system_prompt(persona_id)
+        if cached is not None:
+            return cached
+
+        persona = await self.get(persona_id)
+        if persona is None:
+            return None
+
+        prompt = self.engine.build_system_prompt(self._to_persona_profile(persona))
+        await self.cache.set_system_prompt(persona_id, prompt)
+        return prompt
+
+    async def get_sampling_params(self, persona_id: UUID) -> dict[str, Any] | None:
+        cached = await self.cache.get_sampling(persona_id)
+        if cached is not None:
+            return cached
+
+        persona = await self.get(persona_id)
+        if persona is None:
+            return None
+
+        params = self.engine.get_sampling_params(self._to_persona_profile(persona))
+        await self.cache.set_sampling(persona_id, params)
+        return params
