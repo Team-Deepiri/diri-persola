@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...cache import PersonaCache
 from ...engine import PersonaEngine
-from ...models import PersonaProfile
 from ..models import PersonaModel
 from ..repositories import PersonaRepository
 
@@ -17,42 +16,6 @@ class PersonaService:
         self.repository = PersonaRepository(session)
         self.engine = PersonaEngine()
         self.cache = PersonaCache()
-
-    def _to_persona_profile(self, persona: PersonaModel) -> PersonaProfile:
-        return PersonaProfile(
-            id=str(persona.id),
-            name=persona.name,
-            description=persona.description or "",
-            created_at=persona.created_at,
-            updated_at=persona.updated_at,
-            creativity=persona.creativity,
-            humor=persona.humor,
-            formality=persona.formality,
-            verbosity=persona.verbosity,
-            empathy=persona.empathy,
-            confidence=persona.confidence,
-            openness=persona.openness,
-            conscientiousness=persona.conscientiousness,
-            extraversion=persona.extraversion,
-            agreeableness=persona.agreeableness,
-            neuroticism=persona.neuroticism,
-            reasoning_depth=persona.reasoning_depth,
-            step_by_step=persona.step_by_step,
-            creativity_in_reasoning=persona.creativity_in_reasoning,
-            synthetics=persona.synthetics,
-            abstraction=persona.abstraction,
-            patterns=persona.patterns,
-            accuracy=persona.accuracy,
-            reliability=persona.reliability,
-            caution=persona.caution,
-            consistency=persona.consistency,
-            self_correction=persona.self_correction,
-            transparency=persona.transparency,
-            model=persona.model,
-            temperature=persona.temperature,
-            max_tokens=persona.max_tokens,
-            system_prompt="",
-        )
 
     async def get(self, persona_id: UUID) -> PersonaModel | None:
         return await self.repository.get(persona_id)
@@ -81,7 +44,7 @@ class PersonaService:
         if persona is None:
             return None
 
-        prompt = self.engine.build_system_prompt(self._to_persona_profile(persona))
+        prompt = self.engine.build_system_prompt(persona.to_profile())
         await self.cache.set_system_prompt(persona_id, prompt)
         return prompt
 
@@ -94,6 +57,6 @@ class PersonaService:
         if persona is None:
             return None
 
-        params = self.engine.get_sampling_params(self._to_persona_profile(persona))
+        params = self.engine.get_sampling_params(persona.to_profile())
         await self.cache.set_sampling(persona_id, params)
         return params

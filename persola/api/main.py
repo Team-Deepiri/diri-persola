@@ -74,104 +74,19 @@ style_mapper = StyleToKnobMapper()
 
 
 def _to_persona_profile(persona: PersonaModel) -> PersonaProfile:
-    return PersonaProfile(
-        id=str(persona.id),
-        name=persona.name,
-        description=persona.description or "",
-        created_at=persona.created_at,
-        updated_at=persona.updated_at,
-        creativity=persona.creativity,
-        humor=persona.humor,
-        formality=persona.formality,
-        verbosity=persona.verbosity,
-        empathy=persona.empathy,
-        confidence=persona.confidence,
-        openness=persona.openness,
-        conscientiousness=persona.conscientiousness,
-        extraversion=persona.extraversion,
-        agreeableness=persona.agreeableness,
-        neuroticism=persona.neuroticism,
-        reasoning_depth=persona.reasoning_depth,
-        step_by_step=persona.step_by_step,
-        creativity_in_reasoning=persona.creativity_in_reasoning,
-        synthetics=persona.synthetics,
-        abstraction=persona.abstraction,
-        patterns=persona.patterns,
-        accuracy=persona.accuracy,
-        reliability=persona.reliability,
-        caution=persona.caution,
-        consistency=persona.consistency,
-        self_correction=persona.self_correction,
-        transparency=persona.transparency,
-        model=persona.model,
-        temperature=persona.temperature,
-        max_tokens=persona.max_tokens,
-        system_prompt="",
-    )
+    return persona.to_profile()
 
 
 def _to_agent_config(agent: AgentModel) -> AgentConfig:
-    return AgentConfig(
-        agent_id=str(agent.id),
-        name=agent.name,
-        role=agent.role,
-        model=agent.model or "llama3:8b",
-        temperature=agent.temperature or 0.7,
-        max_tokens=agent.max_tokens or 2000,
-        system_prompt=agent.system_prompt or "",
-        persona_id=str(agent.persona_id) if agent.persona_id else None,
-        tools=agent.tools,
-        memory_enabled=agent.memory_enabled,
-        session_id=None,
-    )
+    return agent.to_config()
 
 
 def _to_persona_model(persona: PersonaProfile) -> PersonaModel:
-    return PersonaModel(
-        name=persona.name,
-        description=persona.description,
-        creativity=persona.creativity,
-        humor=persona.humor,
-        formality=persona.formality,
-        verbosity=persona.verbosity,
-        empathy=persona.empathy,
-        confidence=persona.confidence,
-        openness=persona.openness,
-        conscientiousness=persona.conscientiousness,
-        extraversion=persona.extraversion,
-        agreeableness=persona.agreeableness,
-        neuroticism=persona.neuroticism,
-        reasoning_depth=persona.reasoning_depth,
-        step_by_step=persona.step_by_step,
-        creativity_in_reasoning=persona.creativity_in_reasoning,
-        synthetics=persona.synthetics,
-        abstraction=persona.abstraction,
-        patterns=persona.patterns,
-        accuracy=persona.accuracy,
-        reliability=persona.reliability,
-        caution=persona.caution,
-        consistency=persona.consistency,
-        self_correction=persona.self_correction,
-        transparency=persona.transparency,
-        model=persona.model,
-        temperature=persona.temperature,
-        max_tokens=persona.max_tokens,
-    )
+    return PersonaModel.from_profile(persona)
 
 
 def _to_agent_model(agent: AgentConfig) -> AgentModel:
-    return AgentModel(
-        name=agent.name,
-        role=agent.role,
-        model=agent.model,
-        temperature=agent.temperature,
-        max_tokens=agent.max_tokens,
-        system_prompt=agent.system_prompt,
-        persona_id=UUID(agent.persona_id) if agent.persona_id else None,
-        tools=agent.tools,
-        memory_enabled=agent.memory_enabled,
-        is_active=True,
-    )
+    return AgentModel.from_config(agent)
 
 
 def _build_persona_from_knobs(name: str, knobs: dict[str, float], notes: str) -> PersonaProfile:
@@ -199,11 +114,7 @@ async def _record_persona_version(
             source=source,
             summary=summary,
             knob_snapshot=profile.get_knobs(),
-            settings_snapshot={
-                "model": persona.model,
-                "temperature": persona.temperature,
-                "max_tokens": persona.max_tokens,
-            },
+            settings_snapshot=persona.settings_values(),
         )
     )
 
@@ -235,7 +146,7 @@ async def _sync_agent_tools(db: AsyncSession, agent: AgentModel, tools: list[str
     repo = AgentToolRepository(db)
     await repo.replace_for_agent(
         agent.id,
-        [AgentToolModel(agent_id=agent.id, name=tool_name) for tool_name in tools],
+        [AgentToolModel.from_name(agent_id=agent.id, name=tool_name) for tool_name in tools],
     )
 
 

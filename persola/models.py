@@ -1,5 +1,5 @@
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from datetime import datetime
 from enum import Enum
 
@@ -124,23 +124,23 @@ class PersonaProfile(BaseModel):
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2000, ge=1, le=32000)
 
-    @property
+    @computed_field(return_type=CommunicationStyle)
     def communication_style(self) -> CommunicationStyle:
         return CommunicationStyle(**{key: getattr(self, key) for key in PERSONA_KNOB_GROUPS["communication"]})
 
-    @property
+    @computed_field(return_type=PersonalityTraits)
     def personality_traits(self) -> PersonalityTraits:
         return PersonalityTraits(**{key: getattr(self, key) for key in PERSONA_KNOB_GROUPS["personality"]})
 
-    @property
+    @computed_field(return_type=CognitiveStyle)
     def cognitive_style(self) -> CognitiveStyle:
         return CognitiveStyle(**{key: getattr(self, key) for key in PERSONA_KNOB_GROUPS["cognitive"]})
 
-    @property
+    @computed_field(return_type=ReliabilityProfile)
     def reliability_profile(self) -> ReliabilityProfile:
         return ReliabilityProfile(**{key: getattr(self, key) for key in PERSONA_KNOB_GROUPS["reliability"]})
 
-    @property
+    @computed_field(return_type=ModelSettings)
     def model_settings(self) -> ModelSettings:
         return ModelSettings(
             system_prompt=self.system_prompt,
@@ -148,6 +148,10 @@ class PersonaProfile(BaseModel):
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
+
+    @computed_field(return_type=Dict[str, float])
+    def knobs(self) -> Dict[str, float]:
+        return self.get_knobs()
 
     @classmethod
     def from_components(
@@ -317,11 +321,11 @@ class AgentConfig(BaseModel):
     memory_enabled: bool = True
     session_id: Optional[str] = None
 
-    @property
+    @computed_field(return_type=List[AgentTool])
     def tool_configs(self) -> List[AgentTool]:
         return [AgentTool(name=tool_name) for tool_name in self.tools]
 
-    @property
+    @computed_field(return_type=AgentMemoryPolicy)
     def memory_policy(self) -> AgentMemoryPolicy:
         return AgentMemoryPolicy(enabled=self.memory_enabled)
 

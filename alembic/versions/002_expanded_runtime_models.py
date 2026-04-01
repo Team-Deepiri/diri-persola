@@ -17,6 +17,8 @@ down_revision: Union[str, None] = "001_initial_schema"
 
 
 def upgrade() -> None:
+	op.add_column("personas", sa.Column("system_prompt", sa.Text(), nullable=True))
+
 	op.create_table(
 		"persona_versions",
 		sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
@@ -87,6 +89,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+	op.drop_column("personas", "system_prompt")
+
 	op.drop_index("idx_agent_runs_created_at", table_name="agent_runs")
 	op.drop_index("idx_agent_runs_session_id", table_name="agent_runs")
 	op.drop_index("idx_agent_runs_agent_id", table_name="agent_runs")

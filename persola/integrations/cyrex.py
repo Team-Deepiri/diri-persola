@@ -46,8 +46,12 @@ class CyrexClient:
         if not self.is_configured:
             raise RuntimeError("Cyrex is not configured")
 
+        persona_payload = persona.model_dump(mode="json")
         payload = {
-            "persona": persona.model_dump(mode="json"),
+            "persona": persona_payload,
+            "payload_version": "2",
+            "knobs": persona_payload.get("knobs", {}),
+            "model_settings": persona_payload.get("model_settings", {}),
             "source": "persola",
         }
         async with httpx.AsyncClient(timeout=self.timeout) as client:
