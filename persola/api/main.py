@@ -5,11 +5,12 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 import os
 import logging
 
+from ..analysis import StyleToKnobMapper, WritingStyleExtractor
 from ..models import (
     AgentConfig,
     DEFAULT_PRESETS,
@@ -58,6 +59,8 @@ app.add_middleware(
 
 engine = PersonaEngine()
 cyrex_client = CyrexClient()
+style_extractor = WritingStyleExtractor()
+style_mapper = StyleToKnobMapper()
 
 
 def _to_persona_profile(persona: PersonaModel) -> PersonaProfile:
@@ -161,6 +164,14 @@ def _to_agent_model(agent: AgentConfig) -> AgentModel:
     )
 
 
+def _build_persona_from_knobs(name: str, knobs: dict[str, float], notes: str) -> PersonaProfile:
+    return PersonaProfile(
+        name=name,
+        description=notes,
+        **knobs,
+    )
+
+
 @app.get("/")
 async def root(db: AsyncSession = Depends(get_db)):
     return {"message": "Persola API", "version": "0.1.0"}
@@ -200,6 +211,64 @@ async def get_knobs(db: AsyncSession = Depends(get_db)):
 @app.post("/api/v1/tuning/validate")
 async def validate_knobs(knobs: Dict[str, float], db: AsyncSession = Depends(get_db)):
     return engine.validate_knobs(knobs)
+
+
+class AnalysisExtractRequest(BaseModel):
+    text: str = Field(min_length=1)
+    create_persona: bool = False
+    persona_name: str | None = None
+
+
+class AnalysisCreateRequest(BaseModel):
+    text: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=255)
+
+
+class AnalysisExtractResponse(BaseModel):
+    knobs: Dict[str, float]
+    confidence: float
+    notes: str
+    persona_id: str | None = None
+
+
+async def _run_style_analysis(text: str) -> tuple[dict[str, float], float, str]:
+    analysis = await style_extractor.extract(text)
+    knobs = style_mapper.map(analysis)
+    validation = engine.validate_knobs(knobs)
+    if not validation["valid"]:
+        raise HTTPException(status_code=502, detail="Analysis produced invalid knob values")
+    return knobs, analysis.confidence_score, analysis.notes
+
+
+@app.post("/api/v1/analysis/extract", response_model=AnalysisExtractResponse)
+async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
+    knobs, confidence, notes = await _run_style_analysis(request.text)
+    persona_id: str | None = None
+
+    if request.create_persona:
+        persona_name = request.persona_name or "Writing Style Persona"
+        repo = PersonaRepository(db)
+        persona = _build_persona_from_knobs(persona_name, knobs, notes)
+        created = await repo.create(_to_persona_model(persona))
+        await db.commit()
+        persona_id = str(created.id)
+
+    return AnalysisExtractResponse(
+        knobs=knobs,
+        confidence=confidence,
+        notes=notes,
+        persona_id=persona_id,
+    )
+
+
+@app.post("/api/v1/analysis/extract-and-create", response_model=PersonaProfile)
+async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSession = Depends(get_db)):
+    knobs, _, notes = await _run_style_analysis(request.text)
+    repo = PersonaRepository(db)
+    persona = _build_persona_from_knobs(request.name, knobs, notes)
+    created = await repo.create(_to_persona_model(persona))
+    await db.commit()
+    return _to_persona_profile(created)
 
 
 @app.post("/api/v1/personas", response_model=PersonaProfile)

@@ -16,13 +16,19 @@ Do not infer personal identity, demographic traits, or private facts.
 """
 
 
-def build_analysis_prompt(text: str) -> str:
+ANALYSIS_RETRY_PROMPT_INTRO = """Your previous response was not valid JSON.
+Retry and return only a single valid JSON object.
+Do not add prose, comments, markdown fences, or trailing text.
+Every knob value must be a number between 0.0 and 1.0.
+"""
+
+
+def _build_expected_shape() -> str:
     knob_lines = "\n".join(
         f'- "{knob.key}": {knob.description}'
         for knob in KNOB_DEFINITIONS
     )
     return (
-        f"{ANALYSIS_PROMPT_INTRO}\n"
         "Return a JSON object with this shape:\n"
         "{\n"
         '  "analysis": {\n'
@@ -30,9 +36,31 @@ def build_analysis_prompt(text: str) -> str:
         "  },\n"
         '  "confidence_score": 0.0,\n'
         '  "notes": "short summary of the detected style"\n'
-        "}\n\n"
+        "}"
+    )
+
+
+def build_analysis_prompt(text: str) -> str:
+    return (
+        f"{ANALYSIS_PROMPT_INTRO}\n"
+        f"{_build_expected_shape()}\n\n"
         "Writing sample:\n"
         '"""\n'
         f"{text.strip()}\n"
+        '"""'
+    )
+
+
+def build_analysis_retry_prompt(text: str, invalid_response: str) -> str:
+    return (
+        f"{ANALYSIS_RETRY_PROMPT_INTRO}\n"
+        f"{_build_expected_shape()}\n\n"
+        "Writing sample:\n"
+        '"""\n'
+        f"{text.strip()}\n"
+        '"""\n\n'
+        "Previous invalid response:\n"
+        '"""\n'
+        f"{invalid_response.strip()}\n"
         '"""'
     )

@@ -8,7 +8,7 @@ from typing import Iterable
 
 from ..integrations.llm import PersolaLLM, get_llm_provider
 from ..models import KNOB_DEFINITIONS
-from .prompts import build_analysis_prompt
+from .prompts import build_analysis_prompt, build_analysis_retry_prompt
 
 
 def _clamp(value: float) -> float:
@@ -109,9 +109,22 @@ class WritingStyleExtractor:
         prompt = build_analysis_prompt(sample)
         response = await self.llm.generate(prompt)
         parsed = self._parse_response(response)
-        if parsed is None:
-            return self._heuristic_analysis(sample, notes_prefix="Could not parse structured LLM output; used heuristic analysis.")
-        return parsed
+        if parsed is not None:
+            return parsed
+
+        retry_prompt = build_analysis_retry_prompt(sample, response)
+        retry_response = await self.llm.generate(retry_prompt)
+        retry_parsed = self._parse_response(retry_response)
+        if retry_parsed is None:
+            return self._heuristic_analysis(
+                sample,
+                notes_prefix="Could not parse structured LLM output after retry; used heuristic analysis.",
+            )
+        if retry_parsed.notes:
+            retry_parsed.notes = f"Retried after malformed LLM JSON. {retry_parsed.notes}"
+        else:
+            retry_parsed.notes = "Retried after malformed LLM JSON."
+        return retry_parsed
 
     def _parse_response(self, response: str) -> StyleAnalysis | None:
         candidates = [response.strip()]
