@@ -257,7 +257,7 @@ def get_llm_provider(
     )
 
 
-HAS_CYREX = False  # Kept for compatibility
+HAS_CYREX = bool(os.getenv("CYREX_URL") and os.getenv("CYREX_API_KEY"))
 
 __all__ = [
     "PersolaLLM",
