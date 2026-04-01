@@ -5,7 +5,7 @@ from typing import Any
 from uuid import UUID as PyUUID
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -65,6 +65,8 @@ class PersonaModel(Base):
 	)
 
 	agents: Mapped[list["AgentModel"]] = relationship(back_populates="persona")
+	versions: Mapped[list["PersonaVersionModel"]] = relationship(back_populates="persona", cascade="all, delete-orphan")
+	analysis_runs: Mapped[list["AnalysisRunModel"]] = relationship(back_populates="persona")
 
 
 class AgentModel(Base):
@@ -96,6 +98,8 @@ class AgentModel(Base):
 
 	persona: Mapped["PersonaModel | None"] = relationship(back_populates="agents")
 	sessions: Mapped[list["SessionModel"]] = relationship(back_populates="agent")
+	tool_configs: Mapped[list["AgentToolModel"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
+	runs: Mapped[list["AgentRunModel"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
 
 
 class SessionModel(Base):
@@ -119,6 +123,7 @@ class SessionModel(Base):
 
 	agent: Mapped["AgentModel"] = relationship(back_populates="sessions")
 	messages: Mapped[list["MessageModel"]] = relationship(back_populates="session")
+	runs: Mapped[list["AgentRunModel"]] = relationship(back_populates="session")
 
 
 class MessageModel(Base):
@@ -142,3 +147,111 @@ class MessageModel(Base):
 	created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 	session: Mapped["SessionModel"] = relationship(back_populates="messages")
+
+
+class PersonaVersionModel(Base):
+	__tablename__ = "persona_versions"
+	__table_args__ = (
+		Index("idx_persona_versions_persona_id", "persona_id"),
+		UniqueConstraint("persona_id", "version_number", name="uq_persona_version_number"),
+	)
+
+	id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+	persona_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("personas.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+	source: Mapped[str] = mapped_column(String(50), nullable=False, default="manual")
+	summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+	knob_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	settings_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+	persona: Mapped["PersonaModel"] = relationship(back_populates="versions")
+
+
+class AgentToolModel(Base):
+	__tablename__ = "agent_tools"
+	__table_args__ = (
+		Index("idx_agent_tools_agent_id", "agent_id"),
+		UniqueConstraint("agent_id", "name", name="uq_agent_tool_name"),
+	)
+
+	id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+	agent_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("agents.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	name: Mapped[str] = mapped_column(String(100), nullable=False)
+	description: Mapped[str | None] = mapped_column(Text, nullable=True)
+	enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+	tool_config: Mapped[dict[str, Any]] = mapped_column("config", JSONB, nullable=False, default=dict)
+	created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+	updated_at: Mapped[datetime] = mapped_column(
+		DateTime,
+		nullable=False,
+		default=datetime.utcnow,
+		onupdate=datetime.utcnow,
+	)
+
+	agent: Mapped["AgentModel"] = relationship(back_populates="tool_configs")
+
+
+class AnalysisRunModel(Base):
+	__tablename__ = "analysis_runs"
+	__table_args__ = (
+		Index("idx_analysis_runs_persona_id", "persona_id"),
+		Index("idx_analysis_runs_created_at", "created_at"),
+	)
+
+	id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+	persona_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("personas.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	source_text: Mapped[str] = mapped_column(Text, nullable=False)
+	knobs: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+	notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+	provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+	model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+	created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+	persona: Mapped["PersonaModel | None"] = relationship(back_populates="analysis_runs")
+
+
+class AgentRunModel(Base):
+	__tablename__ = "agent_runs"
+	__table_args__ = (
+		Index("idx_agent_runs_agent_id", "agent_id"),
+		Index("idx_agent_runs_session_id", "session_id"),
+		Index("idx_agent_runs_created_at", "created_at"),
+	)
+
+	id: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+	agent_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("agents.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	session_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("sessions.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
+	provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+	model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+	request_message: Mapped[str] = mapped_column(Text, nullable=False)
+	response_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+	tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
+	run_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+	created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+	completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+	agent: Mapped["AgentModel"] = relationship(back_populates="runs")
+	session: Mapped["SessionModel | None"] = relationship(back_populates="runs")

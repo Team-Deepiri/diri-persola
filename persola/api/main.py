@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Dict, List, Optional
 from uuid import UUID
 
@@ -19,8 +20,17 @@ from ..models import (
     PresetName,
 )
 from ..db.database import check_db_health, close_db, get_db, init_db
-from ..db.models import AgentModel, PersonaModel
-from ..db.repositories import AgentRepository, MessageRepository, PersonaRepository, SessionRepository
+from ..db.models import AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel
+from ..db.repositories import (
+    AgentRepository,
+    AgentRunRepository,
+    AgentToolRepository,
+    AnalysisRunRepository,
+    MessageRepository,
+    PersonaRepository,
+    PersonaVersionRepository,
+    SessionRepository,
+)
 from ..db.services import PersonaService
 from ..engine import PersonaEngine
 from ..integrations.cyrex import CyrexClient, HAS_CYREX
@@ -172,6 +182,63 @@ def _build_persona_from_knobs(name: str, knobs: dict[str, float], notes: str) ->
     )
 
 
+async def _record_persona_version(
+    db: AsyncSession,
+    persona: PersonaModel,
+    *,
+    source: str,
+    summary: str | None = None,
+) -> None:
+    repo = PersonaVersionRepository(db)
+    version_number = await repo.get_latest_version_number(persona.id) + 1
+    profile = _to_persona_profile(persona)
+    await repo.create(
+        PersonaVersionModel(
+            persona_id=persona.id,
+            version_number=version_number,
+            source=source,
+            summary=summary,
+            knob_snapshot=profile.get_knobs(),
+            settings_snapshot={
+                "model": persona.model,
+                "temperature": persona.temperature,
+                "max_tokens": persona.max_tokens,
+            },
+        )
+    )
+
+
+async def _record_analysis_run(
+    db: AsyncSession,
+    *,
+    text: str,
+    knobs: dict[str, float],
+    confidence: float,
+    notes: str,
+    persona_id: UUID | None = None,
+) -> None:
+    repo = AnalysisRunRepository(db)
+    await repo.create(
+        AnalysisRunModel(
+            persona_id=persona_id,
+            source_text=text,
+            knobs=knobs,
+            confidence_score=confidence,
+            notes=notes,
+            provider=style_extractor.llm.get_provider_type(),
+            model=style_extractor.llm.model,
+        )
+    )
+
+
+async def _sync_agent_tools(db: AsyncSession, agent: AgentModel, tools: list[str]) -> None:
+    repo = AgentToolRepository(db)
+    await repo.replace_for_agent(
+        agent.id,
+        [AgentToolModel(agent_id=agent.id, name=tool_name) for tool_name in tools],
+    )
+
+
 @app.get("/")
 async def root(db: AsyncSession = Depends(get_db)):
     return {"message": "Persola API", "version": "0.1.0"}
@@ -244,14 +311,26 @@ async def _run_style_analysis(text: str) -> tuple[dict[str, float], float, str]:
 async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
     knobs, confidence, notes = await _run_style_analysis(request.text)
     persona_id: str | None = None
+    persona_uuid: UUID | None = None
 
     if request.create_persona:
         persona_name = request.persona_name or "Writing Style Persona"
         repo = PersonaRepository(db)
         persona = _build_persona_from_knobs(persona_name, knobs, notes)
         created = await repo.create(_to_persona_model(persona))
-        await db.commit()
+        await _record_persona_version(db, created, source="analysis", summary="Persona created from writing analysis")
+        persona_uuid = created.id
         persona_id = str(created.id)
+
+    await _record_analysis_run(
+        db,
+        text=request.text,
+        knobs=knobs,
+        confidence=confidence,
+        notes=notes,
+        persona_id=persona_uuid,
+    )
+    await db.commit()
 
     return AnalysisExtractResponse(
         knobs=knobs,
@@ -263,10 +342,19 @@ async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = D
 
 @app.post("/api/v1/analysis/extract-and-create", response_model=PersonaProfile)
 async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSession = Depends(get_db)):
-    knobs, _, notes = await _run_style_analysis(request.text)
+    knobs, confidence, notes = await _run_style_analysis(request.text)
     repo = PersonaRepository(db)
     persona = _build_persona_from_knobs(request.name, knobs, notes)
     created = await repo.create(_to_persona_model(persona))
+    await _record_persona_version(db, created, source="analysis", summary="Persona created from writing analysis")
+    await _record_analysis_run(
+        db,
+        text=request.text,
+        knobs=knobs,
+        confidence=confidence,
+        notes=notes,
+        persona_id=created.id,
+    )
     await db.commit()
     return _to_persona_profile(created)
 
@@ -275,6 +363,7 @@ async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSe
 async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
     created = await repo.create(_to_persona_model(persona))
+    await _record_persona_version(db, created, source="manual", summary="Persona created")
     await db.commit()
     return _to_persona_profile(created)
 
@@ -335,6 +424,7 @@ async def update_persona(persona_id: str, persona: PersonaProfile, db: AsyncSess
     )
     if updated is None:
         raise HTTPException(status_code=404, detail="Persona not found")
+    await _record_persona_version(db, updated, source="manual", summary="Persona updated")
     await db.commit()
     return _to_persona_profile(updated)
 
@@ -372,6 +462,7 @@ async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_d
         request.ratio
     )
     created = await repo.create(_to_persona_model(blended))
+    await _record_persona_version(db, created, source="blend", summary=f"Blend ratio {request.ratio:.2f}")
     await db.commit()
     return _to_persona_profile(created)
 
@@ -407,6 +498,7 @@ async def export_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
 async def import_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
     created = await repo.create(_to_persona_model(persona))
+    await _record_persona_version(db, created, source="import", summary="Persona imported")
     await db.commit()
     return _to_persona_profile(created)
 
@@ -445,9 +537,10 @@ async def apply_preset(preset: PresetName, request: ApplyPresetRequest, db: Asyn
         **preset_profile.get_knobs(),
     }
     updated = await service.update(existing.id, updates)
-    await db.commit()
     if updated is None:
         raise HTTPException(status_code=404, detail="Persona not found")
+    await _record_persona_version(db, updated, source="preset", summary=f"Applied preset {preset.value}")
+    await db.commit()
     return _to_persona_profile(updated)
 
 
@@ -463,6 +556,7 @@ async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
             model.system_prompt = engine.build_system_prompt(_to_persona_profile(persona))
 
     created = await agent_repo.create(model)
+    await _sync_agent_tools(db, created, agent.tools)
     await db.commit()
     return _to_agent_config(created)
 
@@ -629,6 +723,7 @@ async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(ge
     try:
         profile = await cyrex_client.pull_persona(cyrex_id)
         created = await persona_repo.create(_to_persona_model(profile))
+        await _record_persona_version(db, created, source="cyrex", summary=f"Imported from Cyrex {cyrex_id}")
         await db.commit()
         return _to_persona_profile(created)
     except Exception as e:
@@ -639,6 +734,7 @@ async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(ge
 @app.post("/api/v1/agents/{agent_id}/invoke")
 async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession = Depends(get_db)):
     agent_repo = AgentRepository(db)
+    agent_run_repo = AgentRunRepository(db)
     persona_repo = PersonaRepository(db)
     session_repo = SessionRepository(db)
     message_repo = MessageRepository(db)
@@ -650,8 +746,25 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
     runtime_session_id = request.session_id or f"{agent_id}-default"
     session = await session_repo.get_or_create(agent.id, runtime_session_id)
     await message_repo.add(session.id, "user", request.message)
+    run = await agent_run_repo.create(
+        AgentRunModel(
+            agent_id=agent.id,
+            session_id=session.id,
+            status="running",
+            request_message=request.message,
+            model=agent.model,
+            run_metadata={"requested_at": datetime.utcnow().isoformat()},
+        )
+    )
 
     if not HAS_CYREX:
+        await agent_run_repo.mark_completed(
+            run.id,
+            status="unavailable",
+            response_message="[Persola] Cyrex not available. Install dependencies to enable LLM inference.",
+            provider="none",
+            model=agent.model,
+        )
         await db.commit()
         return {
             "agent_id": agent_id,
@@ -675,6 +788,13 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
         )
         
         if not llm.is_available():
+            await agent_run_repo.mark_completed(
+                run.id,
+                status="unavailable",
+                response_message="[Persola] No LLM provider available. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or ensure Ollama is running.",
+                provider=provider_type,
+                model=agent.model,
+            )
             await db.commit()
             return {
                 "agent_id": agent_id,
@@ -699,6 +819,13 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             provider=llm.get_provider_type(),
         )
         await session_repo.increment_message_count(session.id)
+        await agent_run_repo.mark_completed(
+            run.id,
+            status="completed",
+            response_message=response,
+            provider=llm.get_provider_type(),
+            model=agent.model,
+        )
         await db.commit()
         
         return {
@@ -709,6 +836,13 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
         }
         
     except Exception as e:
+        await agent_run_repo.mark_completed(
+            run.id,
+            status="failed",
+            response_message=f"[Persola Error] {str(e)}",
+            provider=None,
+            model=agent.model,
+        )
         await db.commit()
         logger.error(f"LLM invocation error: {e}")
         return {
