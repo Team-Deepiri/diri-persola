@@ -1,13 +1,12 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Dict, List, Optional
-from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Dict, Any, List, Optional
+import uuid
 import os
 import logging
 
@@ -33,24 +32,32 @@ from ..db.repositories import (
 )
 from ..db.services import PersonaService
 from ..engine import PersonaEngine
+from ..integrations.llm import get_llm_provider, HAS_CYREX
 from ..integrations.cyrex import CyrexClient, HAS_CYREX
-from ..integrations.llm import get_llm_provider
+from ..db import get_db, init_db, close_db, PersonaRepo, AgentRepo
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("persola.api")
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(application: FastAPI):
+    """Startup: init DB, seed presets. Shutdown: dispose connection pool."""
+    
+    logger.info("Initializing database...")
     await init_db()
-    # Seed presets once at startup; repository method is idempotent.
+    logger.info("Database ready.")
+
+    # Seed presets once at startup (idempotent)
     async for db in get_db():
         repo = PersonaRepository(db)
         await repo.seed_presets(DEFAULT_PRESETS)
         await db.commit()
         break
-    yield
-    await close_db()
 
+    yield
+
+    logger.info("Shutting down database...")
+    await close_db()
 
 app = FastAPI(
     title="Persola API",
@@ -166,6 +173,18 @@ async def health(db: AsyncSession = Depends(get_db)):
     }
 
 
+@app.get("/health/db")
+async def health_db(db: AsyncSession = Depends(get_db)):
+    """Check database connectivity."""
+    try:
+        from sqlalchemy import text
+        result = await db.execute(text("SELECT 1"))
+        result.scalar()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database unreachable: {e}")
+
+
 @app.get("/api/v1/tuning/knobs")
 async def get_knobs(db: AsyncSession = Depends(get_db)):
     return {
@@ -273,8 +292,18 @@ async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSe
 @app.post("/api/v1/personas", response_model=PersonaProfile)
 async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
+    # Ensure ID exists if upstream doesn't provide one
+    if not getattr(persona, "id", None):
+        persona.id = f"persona_{uuid.uuid4().hex[:8]}"
+
     created = await repo.create(_to_persona_model(persona))
-    await _record_persona_version(db, created, source="manual", summary="Persona created")
+    await _record_persona_version(
+        db,
+        created,
+        source="manual",
+        summary="Persona created"
+    )
+
     await db.commit()
     return _to_persona_profile(created)
 
@@ -461,15 +490,23 @@ async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
     persona_repo = PersonaRepository(db)
 
     model = _to_agent_model(agent)
+
+    # Build system prompt if persona exists
     if model.persona_id:
         persona = await persona_repo.get(model.persona_id)
         if persona is not None:
             model.system_prompt = engine.build_system_prompt(_to_persona_profile(persona))
 
     created = await agent_repo.create(model)
+
+    # Sync tools after creation
     await _sync_agent_tools(db, created, agent.tools)
+
+    # Commit transaction
     await db.commit()
-    return _to_agent_config(created)
+
+    # Return API-friendly config
+    return _to_agent_config(created)  
 
 
 @app.get("/api/v1/agents", response_model=List[AgentConfig])
