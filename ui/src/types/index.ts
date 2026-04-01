@@ -42,6 +42,67 @@ export interface PersonaProfile {
   model: string;
   temperature: number;
   max_tokens: number;
+  knobs: Record<string, number>;
+  communication_style: CommunicationStyle;
+  personality_traits: PersonalityTraits;
+  cognitive_style: CognitiveStyle;
+  reliability_profile: ReliabilityProfile;
+  model_settings: ModelSettings;
+}
+
+export interface CommunicationStyle {
+  creativity: number;
+  humor: number;
+  formality: number;
+  verbosity: number;
+  empathy: number;
+  confidence: number;
+}
+
+export interface PersonalityTraits {
+  openness: number;
+  conscientiousness: number;
+  extraversion: number;
+  agreeableness: number;
+  neuroticism: number;
+}
+
+export interface CognitiveStyle {
+  reasoning_depth: number;
+  step_by_step: number;
+  creativity_in_reasoning: number;
+  synthetics: number;
+  abstraction: number;
+  patterns: number;
+}
+
+export interface ReliabilityProfile {
+  accuracy: number;
+  reliability: number;
+  caution: number;
+  consistency: number;
+  self_correction: number;
+  transparency: number;
+}
+
+export interface ModelSettings {
+  system_prompt: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+}
+
+export interface AgentTool {
+  name: string;
+  enabled: boolean;
+  description: string;
+  config: Record<string, unknown>;
+}
+
+export interface AgentMemoryPolicy {
+  enabled: boolean;
+  session_scope: string;
+  history_window: number;
 }
 
 export interface AgentConfig {
@@ -56,6 +117,8 @@ export interface AgentConfig {
   tools: string[];
   memory_enabled: boolean;
   session_id?: string;
+  tool_configs: AgentTool[];
+  memory_policy: AgentMemoryPolicy;
 }
 
 export interface Preset {
