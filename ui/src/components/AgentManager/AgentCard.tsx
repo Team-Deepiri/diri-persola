@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
 import { agentsApi } from '../../api';
 import type { AgentConfig, InvokeRequest } from '../../types';
 import './AgentCard.css';
@@ -58,7 +58,7 @@ export function AgentCard({ agent, personaName, onEdit }: AgentCardProps) {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleInvoke();

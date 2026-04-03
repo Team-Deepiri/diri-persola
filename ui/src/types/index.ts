@@ -163,6 +163,13 @@ export interface Message {
   created_at: string;
 }
 
+export interface AnalysisExtractResponse {
+  knobs: Record<string, number>;
+  confidence: number;
+  notes: string;
+  persona_id: string | null;
+}
+
 export interface InvokeRequest {
   message: string;
   session_id?: string;

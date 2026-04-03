@@ -9,6 +9,7 @@ import type {
   InvokeResponse,
   Session,
   Message,
+  AnalysisExtractResponse,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -53,6 +54,13 @@ export const agentsApi = {
     api.post<AgentConfig>('/agents', agent),
   invoke: (id: string, request: InvokeRequest) => 
     api.post<InvokeResponse>(`/agents/${id}/invoke`, request),
+};
+
+export const analysisApi = {
+  extract: (text: string) =>
+    api.post<AnalysisExtractResponse>('/analysis/extract', { text, create_persona: false }),
+  extractAndCreate: (text: string, name: string) =>
+    api.post<PersonaProfile>('/analysis/extract-and-create', { text, name }),
 };
 
 export const sessionsApi = {
