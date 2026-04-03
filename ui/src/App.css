@@ -116,6 +116,11 @@ body {
   background: var(--bg-primary);
 }
 
+.page-container {
+  padding: 32px;
+  max-width: 1200px;
+}
+
 input, textarea, button {
   font-family: inherit;
 }

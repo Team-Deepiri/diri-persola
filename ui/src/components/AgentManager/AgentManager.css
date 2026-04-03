@@ -1,0 +1,148 @@
+.agent-manager {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* ── Toolbar ── */
+.agent-manager-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 3px;
+}
+
+.view-btn {
+  padding: 6px 14px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.view-btn.active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.view-btn:hover:not(.active) {
+  color: var(--text-primary);
+}
+
+/* ── Inline invoke panel ── */
+.agent-manager-invoke-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.invoke-panel-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.invoke-panel-label strong {
+  color: var(--text-primary);
+}
+
+.invoke-panel-close {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  padding: 0;
+  margin-left: auto;
+}
+
+.invoke-panel-close:hover {
+  background: var(--border-light);
+  color: var(--text-primary);
+}
+
+/* ── Cards view ── */
+.agent-cards-section {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.agent-cards-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-list-title {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.agent-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.agent-cards-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 60px 20px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-light);
+  border-radius: 16px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  text-align: center;
+}
+
+/* Shared btn (used across AgentManager views) */
+.btn {
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
