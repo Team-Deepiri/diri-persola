@@ -17,7 +17,7 @@ interface OptimisticMessage extends Omit<Message, 'id'> {
   _optimistic?: true;
 }
 
-export function ConversationView() {
+export function ConversationView({ initialAgentId }: { initialAgentId?: string } = {}) {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -40,7 +40,10 @@ export function ConversationView() {
     agentsApi.list()
       .then(r => {
         setAgents(r.data);
-        if (r.data.length > 0) setSelectedAgentId(r.data[0].agent_id);
+        const target = (initialAgentId && r.data.find((a: AgentConfig) => a.agent_id === initialAgentId))
+          ? initialAgentId
+          : r.data[0]?.agent_id;
+        if (target) setSelectedAgentId(target);
       })
       .catch(err => console.error('Failed to load agents:', err))
       .finally(() => setAgentsLoading(false));
