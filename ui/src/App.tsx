@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { TuningLab } from './components/TuningLab';
 import { AgentManager } from './components/AgentManager';
+import { ConversationView } from './components/Conversation';
 import './App.css';
 
-type Page = 'tuning' | 'agents';
+type Page = 'tuning' | 'agents' | 'conversation';
 
 function App() {
   const [page, setPage] = useState<Page>('tuning');
@@ -31,6 +32,12 @@ function App() {
             >
               <span>🤖</span> Agents
             </div>
+            <div
+              className={`nav-item ${page === 'conversation' ? 'active' : ''}`}
+              onClick={() => setPage('conversation')}
+            >
+              <span>💬</span> Conversations
+            </div>
           </div>
         </nav>
       </aside>
@@ -42,6 +49,7 @@ function App() {
             <AgentManager />
           </div>
         )}
+        {page === 'conversation' && <ConversationView />}
       </main>
     </div>
   );

@@ -6,7 +6,9 @@ import type {
   PresetsResponse,
   BlendRequest,
   InvokeRequest,
-  InvokeResponse 
+  InvokeResponse,
+  Session,
+  Message,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -51,6 +53,11 @@ export const agentsApi = {
     api.post<AgentConfig>('/agents', agent),
   invoke: (id: string, request: InvokeRequest) => 
     api.post<InvokeResponse>(`/agents/${id}/invoke`, request),
+};
+
+export const sessionsApi = {
+  listByAgent: (agentId: string) => api.get<Session[]>(`/agents/${agentId}/sessions`),
+  getMessages: (sessionId: string) => api.get<Message[]>(`/sessions/${sessionId}/messages`),
 };
 
 export default api;
