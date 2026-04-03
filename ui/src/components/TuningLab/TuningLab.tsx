@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, type ChangeEvent } from 'react';
+import { useLocation } from 'react-router-dom';
 import { KnobPanel } from '../KnobPanel';
 import { Presets } from '../Presets';
 import { knobsApi, presetsApi, personasApi } from '../../api';
-import type { KnobDefinition, Preset, PanelName } from '../../types';
+import type { KnobDefinition, PersonaProfile, Preset, PanelName } from '../../types';
 import { PANELS } from '../../types';
 import './TuningLab.css';
 
@@ -14,13 +15,20 @@ const DEFAULT_KNOBS: Record<string, number> = {
 };
 
 export function TuningLab() {
+  const location = useLocation();
+  const incomingPersona = (location.state as { persona?: PersonaProfile } | null)?.persona ?? null;
+
   const [knobs, setKnobs] = useState<KnobDefinition[]>([]);
   const [presets, setPresets] = useState<Record<string, Preset>>({});
   const [activePreset, setActivePreset] = useState<string | null>(null);
-  const [values, setValues] = useState<Record<string, number>>(DEFAULT_KNOBS);
-  const [personaName, setPersonaName] = useState('My Assistant');
-  const [personaDescription, setPersonaDescription] = useState('A helpful and versatile AI assistant');
-  const [currentPersonaId, setCurrentPersonaId] = useState<string | null>(null);
+  const [values, setValues] = useState<Record<string, number>>(
+    incomingPersona ? { ...DEFAULT_KNOBS, ...incomingPersona.knobs } : DEFAULT_KNOBS,
+  );
+  const [personaName, setPersonaName] = useState(incomingPersona?.name ?? 'My Assistant');
+  const [personaDescription, setPersonaDescription] = useState(
+    incomingPersona?.description ?? 'A helpful and versatile AI assistant',
+  );
+  const [currentPersonaId, setCurrentPersonaId] = useState<string | null>(incomingPersona?.id ?? null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);

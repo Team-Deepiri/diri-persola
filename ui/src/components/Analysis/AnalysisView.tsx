@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { analysisApi, knobsApi } from '../../api';
 import type { AnalysisExtractResponse, KnobDefinition, PersonaProfile } from '../../types';
 import { SampleUpload } from './SampleUpload';
@@ -6,6 +7,7 @@ import { AnalysisResult } from './AnalysisResult';
 import './AnalysisView.css';
 
 export function AnalysisView() {
+  const navigate = useNavigate();
   const [knobDefs, setKnobDefs] = useState<KnobDefinition[]>([]);
 
   const [analyzing, setAnalyzing] = useState(false);
@@ -18,11 +20,6 @@ export function AnalysisView() {
 
   // Persist the last submitted text across renders for extract-and-create
   const lastTextRef = useRef('');
-
-  // Navigation callback: lifted to App via callback prop
-  // For decoupled use we expose an onNavigate prop below
-  const [navigateToTuning, setNavigateToTuning] = useState(false);
-  const [tuningPersona, setTuningPersona] = useState<PersonaProfile | null>(null);
 
   useEffect(() => {
     knobsApi.getKnobs()
@@ -74,17 +71,8 @@ export function AnalysisView() {
   };
 
   const handleOpenPersona = (persona: PersonaProfile) => {
-    setTuningPersona(persona);
-    setNavigateToTuning(true);
+    navigate('/', { state: { persona } });
   };
-
-  // Whenever the parent wires onNavigateToTuning, emit it
-  useEffect(() => {
-    if (navigateToTuning && tuningPersona) {
-      // Reset so a second click works
-      setNavigateToTuning(false);
-    }
-  }, [navigateToTuning, tuningPersona]);
 
   const handleReset = () => {
     setResult(null);

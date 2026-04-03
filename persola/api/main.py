@@ -525,6 +525,46 @@ async def get_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
     return _to_agent_config(agent)
 
 
+@app.put("/api/v1/agents/{agent_id}", response_model=AgentConfig)
+async def update_agent(agent_id: str, agent: AgentConfig, db: AsyncSession = Depends(get_db)):
+    repo = AgentRepository(db)
+    existing = await repo.get(UUID(agent_id))
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    update_data = {
+        "name": agent.name,
+        "role": agent.role,
+        "model": agent.model,
+        "temperature": agent.temperature,
+        "max_tokens": agent.max_tokens,
+        "system_prompt": agent.system_prompt,
+        "persona_id": UUID(agent.persona_id) if agent.persona_id else None,
+        "tools": list(agent.tools),
+        "memory_enabled": agent.memory_enabled,
+    }
+
+    if agent.persona_id:
+        persona_repo = PersonaRepository(db)
+        persona = await persona_repo.get(UUID(agent.persona_id))
+        if persona is not None:
+            update_data["system_prompt"] = engine.build_system_prompt(_to_persona_profile(persona))
+
+    updated = await repo.update(UUID(agent_id), update_data)
+    await _sync_agent_tools(db, updated, agent.tools)
+    await db.commit()
+    return _to_agent_config(updated)
+
+
+@app.delete("/api/v1/agents/{agent_id}", status_code=204)
+async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
+    repo = AgentRepository(db)
+    deleted = await repo.delete(UUID(agent_id))
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    await db.commit()
+
+
 @app.get("/api/v1/agents/{agent_id}/sessions")
 async def list_agent_sessions(agent_id: str, db: AsyncSession = Depends(get_db)):
     session_repo = SessionRepository(db)

@@ -59,8 +59,7 @@ export function AgentManager() {
     setSaving(true);
     try {
       if (editingAgent) {
-        // No update endpoint in current API — re-create or ignore; use create optimistically
-        await agentsApi.create({ ...editingAgent, ...data });
+        await agentsApi.update(editingAgent.agent_id, { ...editingAgent, ...data });
       } else {
         await agentsApi.create(data);
       }
@@ -75,7 +74,11 @@ export function AgentManager() {
 
   const handleDelete = async (agentId: string) => {
     if (!window.confirm('Delete this agent? This cannot be undone.')) return;
-    // Optimistic removal — API delete endpoint not in current spec, so we update local state only
+    try {
+      await agentsApi.delete(agentId);
+    } catch (err) {
+      console.error('Failed to delete agent:', err);
+    }
     setAgents(prev => prev.filter(a => a.agent_id !== agentId));
     if (invokedAgent?.agent_id === agentId) setInvokedAgent(null);
   };
@@ -157,7 +160,7 @@ export function AgentManager() {
             </div>
           ) : (
             <div className="agent-cards-grid">
-              {agents.map(agent => (
+              {agents.map((agent: AgentConfig) => (
                 <AgentCard
                   key={agent.agent_id}
                   agent={agent}

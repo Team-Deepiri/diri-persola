@@ -60,6 +60,9 @@ export const agentsApi = {
   get: (id: string) => api.get<AgentConfig>(`/agents/${id}`),
   create: (agent: Partial<AgentConfig>) => 
     api.post<AgentConfig>('/agents', agent),
+  update: (id: string, agent: Partial<AgentConfig>) =>
+    api.put<AgentConfig>(`/agents/${id}`, agent),
+  delete: (id: string) => api.delete(`/agents/${id}`),
   invoke: (id: string, request: InvokeRequest) => 
     api.post<InvokeResponse>(`/agents/${id}/invoke`, request),
 };
