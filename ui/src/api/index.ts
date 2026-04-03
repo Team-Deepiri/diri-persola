@@ -10,6 +10,7 @@ import type {
   Session,
   Message,
   AnalysisExtractResponse,
+  StyleAnalysis,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -39,6 +40,13 @@ export const personasApi = {
     api.get<{ system_prompt: string }>(`/personas/${id}/system-prompt`),
   getSampling: (id: string) => 
     api.get<Record<string, unknown>>(`/personas/${id}/sampling`),
+  exportPersona: (id: string) =>
+    api.get<Blob>(`/personas/${id}/export`, { responseType: 'blob' }),
+  importPersona: async (file: File) => {
+    const text = await file.text();
+    const data = JSON.parse(text) as PersonaProfile;
+    return api.post<PersonaProfile>('/personas/import', data);
+  },
 };
 
 export const presetsApi = {
@@ -58,12 +66,13 @@ export const agentsApi = {
 
 export const analysisApi = {
   extract: (text: string) =>
-    api.post<AnalysisExtractResponse>('/analysis/extract', { text, create_persona: false }),
+    api.post<StyleAnalysis>('/analysis/extract', { text, create_persona: false }),
   extractAndCreate: (text: string, name: string) =>
     api.post<PersonaProfile>('/analysis/extract-and-create', { text, name }),
 };
 
 export const sessionsApi = {
+  list: (agentId: string) => api.get<Session[]>(`/agents/${agentId}/sessions`),
   listByAgent: (agentId: string) => api.get<Session[]>(`/agents/${agentId}/sessions`),
   getMessages: (sessionId: string) => api.get<Message[]>(`/sessions/${sessionId}/messages`),
 };

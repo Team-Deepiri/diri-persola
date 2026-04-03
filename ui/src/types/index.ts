@@ -170,6 +170,9 @@ export interface AnalysisExtractResponse {
   persona_id: string | null;
 }
 
+/** Alias for AnalysisExtractResponse */
+export type StyleAnalysis = AnalysisExtractResponse;
+
 export interface InvokeRequest {
   message: string;
   session_id?: string;
