@@ -3,9 +3,10 @@ import { TuningLab } from './components/TuningLab';
 import { AgentManager } from './components/AgentManager';
 import { ConversationView } from './components/Conversation';
 import { AnalysisView } from './components/Analysis';
+import { BlendTool } from './components/BlendTool';
 import './App.css';
 
-type Page = 'tuning' | 'agents' | 'conversation' | 'analyze';
+type Page = 'tuning' | 'agents' | 'conversation' | 'analyze' | 'blend';
 
 function App() {
   const [page, setPage] = useState<Page>('tuning');
@@ -45,6 +46,12 @@ function App() {
             >
               <span>🔍</span> Analyze Style
             </div>
+            <div
+              className={`nav-item ${page === 'blend' ? 'active' : ''}`}
+              onClick={() => setPage('blend')}
+            >
+              <span>🎭</span> Blend
+            </div>
           </div>
         </nav>
       </aside>
@@ -58,6 +65,7 @@ function App() {
         )}
         {page === 'conversation' && <ConversationView />}
         {page === 'analyze' && <AnalysisView />}
+        {page === 'blend' && <BlendTool />}
       </main>
     </div>
   );
