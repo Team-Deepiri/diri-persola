@@ -1,14 +1,19 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, List, Optional
 import uuid
 import os
 import logging
+
+limiter = Limiter(key_func=get_remote_address)
 
 from ..analysis import StyleToKnobMapper, WritingStyleExtractor
 from ..models import (
@@ -67,6 +72,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(APIKeyAuth)
 app.add_middleware(
     CORSMiddleware,
@@ -240,13 +247,14 @@ async def _run_style_analysis(text: str) -> tuple[dict[str, float], float, str]:
 
 
 @app.post("/api/v1/analysis/extract", response_model=AnalysisExtractResponse)
-async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
-    knobs, confidence, notes = await _run_style_analysis(request.text)
+@limiter.limit("10/minute")
+async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
+    knobs, confidence, notes = await _run_style_analysis(body.text)
     persona_id: str | None = None
     persona_uuid: UUID | None = None
 
-    if request.create_persona:
-        persona_name = request.persona_name or "Writing Style Persona"
+    if body.create_persona:
+        persona_name = body.persona_name or "Writing Style Persona"
         repo = PersonaRepository(db)
         persona = _build_persona_from_knobs(persona_name, knobs, notes)
         created = await repo.create(_to_persona_model(persona))
@@ -256,7 +264,7 @@ async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = D
 
     await _record_analysis_run(
         db,
-        text=request.text,
+        text=body.text,
         knobs=knobs,
         confidence=confidence,
         notes=notes,
@@ -722,7 +730,8 @@ async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(ge
 
 
 @app.post("/api/v1/agents/{agent_id}/invoke")
-async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def invoke_agent(request: Request, agent_id: str, body: InvokeRequest, db: AsyncSession = Depends(get_db)):
     agent_repo = AgentRepository(db)
     agent_run_repo = AgentRunRepository(db)
     persona_repo = PersonaRepository(db)
@@ -733,15 +742,15 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    runtime_session_id = request.session_id or f"{agent_id}-default"
+    runtime_session_id = body.session_id or f"{agent_id}-default"
     session = await session_repo.get_or_create(agent.id, runtime_session_id)
-    await message_repo.add(session.id, "user", request.message)
+    await message_repo.add(session.id, "user", body.message)
     run = await agent_run_repo.create(
         AgentRunModel(
             agent_id=agent.id,
             session_id=session.id,
             status="running",
-            request_message=request.message,
+            request_message=body.message,
             model=agent.model,
             run_metadata={"requested_at": datetime.utcnow().isoformat()},
         )
@@ -759,7 +768,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
         return {
             "agent_id": agent_id,
             "response": "[Persola] Cyrex not available. Install dependencies to enable LLM inference.",
-            "message": request.message,
+            "message": body.message,
             "provider": "none",
         }
     
@@ -789,7 +798,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             return {
                 "agent_id": agent_id,
                 "response": "[Persola] No LLM provider available. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or ensure Ollama is running.",
-                "message": request.message,
+                "message": body.message,
                 "provider": provider_type,
             }
 
@@ -798,7 +807,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             engine.build_system_prompt(_to_persona_profile(profile)) if profile else ""
         )
         
-        full_prompt = f"{system_prompt}\n\nUser: {request.message}\n\nAssistant:" if system_prompt else request.message
+        full_prompt = f"{system_prompt}\n\nUser: {body.message}\n\nAssistant:" if system_prompt else body.message
         
         response = await llm.generate(full_prompt)
 
@@ -821,7 +830,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
         return {
             "agent_id": agent_id,
             "response": response,
-            "message": request.message,
+            "message": body.message,
             "provider": llm.get_provider_type(),
         }
         
@@ -838,7 +847,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
         return {
             "agent_id": agent_id,
             "response": f"[Persola Error] {str(e)}",
-            "message": request.message,
+            "message": body.message,
             "error": str(e),
         }
 
