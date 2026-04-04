@@ -4,7 +4,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 
-_EXEMPT_PREFIXES = ("/health", "/", "/ui", "/static")
+_EXEMPT_PREFIXES = ("/health", "/", "/ui", "/static", "/metrics")
 
 
 def _get_valid_keys() -> frozenset[str]:

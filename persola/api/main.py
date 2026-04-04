@@ -37,6 +37,13 @@ from ..db.repositories import (
 )
 from ..db.services import PersonaService
 from ..auth import APIKeyAuth
+from ..metrics import (
+    MetricsMiddleware,
+    metrics_endpoint,
+    record_llm_tokens,
+    set_agents_total,
+    set_personas_total,
+)
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
 from ..integrations.cyrex import CyrexClient, HAS_CYREX
@@ -75,6 +82,7 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(MetricsMiddleware)
 app.add_middleware(APIKeyAuth)
 app.add_middleware(
     CORSMiddleware,
@@ -170,6 +178,9 @@ async def _sync_agent_tools(db: AsyncSession, agent: AgentModel, tools: list[str
 @app.get("/")
 async def root(db: AsyncSession = Depends(get_db)):
     return {"message": "Persola API", "version": "0.1.0"}
+
+
+app.add_route("/metrics", metrics_endpoint, methods=["GET"])
 
 
 @app.get("/health")
@@ -317,6 +328,8 @@ async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get
 
     await db.commit()
     log.info("persona.created", persona_id=str(created.id), name=created.name)
+    personas = await PersonaRepository(db).count()
+    set_personas_total(personas)
     return _to_persona_profile(created)
 
 
@@ -388,6 +401,8 @@ async def delete_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     if not deleted:
         raise HTTPException(status_code=404, detail="Persona not found")
     await db.commit()
+    count = await repo.count()
+    set_personas_total(count)
     return {"deleted": True}
 
 
@@ -518,6 +533,8 @@ async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     # Return API-friendly config
+    agents = await agent_repo.count()
+    set_agents_total(agents)
     return _to_agent_config(created)  
 
 
@@ -575,6 +592,8 @@ async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent not found")
     await db.commit()
+    count = await repo.count()
+    set_agents_total(count)
 
 
 @app.get("/api/v1/agents/{agent_id}/sessions")
@@ -834,6 +853,11 @@ async def invoke_agent(request: Request, agent_id: str, body: InvokeRequest, db:
             session_id=runtime_session_id,
             provider=llm.get_provider_type(),
             tokens=run.tokens_used,
+        )
+        record_llm_tokens(
+            provider=llm.get_provider_type(),
+            model=agent.model or "unknown",
+            tokens=run.tokens_used or 0,
         )
         return {
             "agent_id": agent_id,
