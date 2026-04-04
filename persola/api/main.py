@@ -31,6 +31,7 @@ from ..db.repositories import (
     SessionRepository,
 )
 from ..db.services import PersonaService
+from ..auth import APIKeyAuth
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
 from ..integrations.cyrex import CyrexClient, HAS_CYREX
@@ -66,6 +67,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(APIKeyAuth)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
