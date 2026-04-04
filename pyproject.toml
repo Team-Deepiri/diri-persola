@@ -48,6 +48,8 @@ persola-server = "persola.api.main:main"
 pytest = "^8.0.0"
 pytest-asyncio = "^0.23.0"
 pytest-cov = "^4.1.0"
+anyio = {extras = ["trio"], version = "^4.0.0"}
+aiosqlite = "^0.20.0"
 black = "^24.0.0"
 ruff = "^0.1.0"
 mypy = "^1.8.0"
@@ -68,3 +70,12 @@ disallow_untyped_defs = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["persola"]
+omit = ["persola/ui/*", "alembic/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
