@@ -87,8 +87,8 @@ PERSONA_KNOB_GROUPS: Dict[str, tuple[str, ...]] = {
 
 class PersonaProfile(BaseModel):
     id: str = Field(default_factory=lambda: f"persona_{datetime.utcnow().timestamp()}")
-    name: str = "Untitled Persona"
-    description: str = ""
+    name: str = Field(default="Untitled Persona", max_length=200)
+    description: str = Field(default="", max_length=2000)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
@@ -310,7 +310,7 @@ DEFAULT_PRESETS: Dict[PresetName, PersonaProfile] = {
 
 class AgentConfig(BaseModel):
     agent_id: str = Field(default_factory=lambda: f"agent_{datetime.utcnow().timestamp()}")
-    name: str = "Persola Agent"
+    name: str = Field(default="Persola Agent", max_length=200)
     role: str = "assistant"
     model: str = "llama3:8b"
     temperature: float = 0.7

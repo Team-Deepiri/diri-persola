@@ -220,14 +220,14 @@ async def validate_knobs(knobs: Dict[str, float], db: AsyncSession = Depends(get
 
 
 class AnalysisExtractRequest(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=50_000)
     create_persona: bool = False
-    persona_name: str | None = None
+    persona_name: str | None = Field(default=None, max_length=200)
 
 
 class AnalysisCreateRequest(BaseModel):
-    text: str = Field(min_length=1)
-    name: str = Field(min_length=1, max_length=255)
+    text: str = Field(min_length=1, max_length=50_000)
+    name: str = Field(min_length=1, max_length=200)
 
 
 class AnalysisExtractResponse(BaseModel):
@@ -619,7 +619,7 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
 
 
 class InvokeRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=32_768)
     session_id: Optional[str] = None
     history: Optional[List[Dict[str, str]]] = None
 
