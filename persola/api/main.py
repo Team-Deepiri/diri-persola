@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, List, Optional
 import uuid
 import os
-import logging
+import structlog
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -41,17 +41,18 @@ from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
 from ..integrations.cyrex import CyrexClient, HAS_CYREX
 from ..db import get_db, init_db, close_db, PersonaRepo, AgentRepo
+from ..logging import configure_logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("persola.api")
+configure_logging()
+log = structlog.get_logger("persola.api")
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Startup: init DB, seed presets. Shutdown: dispose connection pool."""
     
-    logger.info("Initializing database...")
+    log.info("db.init")
     await init_db()
-    logger.info("Database ready.")
+    log.info("db.ready")
 
     # Seed presets once at startup (idempotent)
     async for db in get_db():
@@ -62,7 +63,7 @@ async def lifespan(application: FastAPI):
 
     yield
 
-    logger.info("Shutting down database...")
+    log.info("db.shutdown")
     await close_db()
 
 app = FastAPI(
@@ -315,6 +316,7 @@ async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get
     )
 
     await db.commit()
+    log.info("persona.created", persona_id=str(created.id), name=created.name)
     return _to_persona_profile(created)
 
 
@@ -688,7 +690,7 @@ async def list_cyrex_agents(db: AsyncSession = Depends(get_db)):
     try:
         return {"agents": await cyrex_client.list_cyrex_agents()}
     except Exception as e:
-        logger.error(f"Cyrex list agents error: {e}")
+        log.error("cyrex.list_agents.error", error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex request failed: {str(e)}") from e
 
 
@@ -709,7 +711,7 @@ async def sync_persona_to_cyrex(persona_id: str, db: AsyncSession = Depends(get_
             "cyrex_response": payload,
         }
     except Exception as e:
-        logger.error(f"Cyrex sync error: {e}")
+        log.error("cyrex.sync.error", persona_id=persona_id, error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex sync failed: {str(e)}") from e
 
 
@@ -725,7 +727,7 @@ async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(ge
         await db.commit()
         return _to_persona_profile(created)
     except Exception as e:
-        logger.error(f"Cyrex import error: {e}")
+        log.error("cyrex.import.error", cyrex_id=cyrex_id, error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex import failed: {str(e)}") from e
 
 
@@ -826,7 +828,13 @@ async def invoke_agent(request: Request, agent_id: str, body: InvokeRequest, db:
             model=agent.model,
         )
         await db.commit()
-        
+        log.info(
+            "agent.invoked",
+            agent_id=agent_id,
+            session_id=runtime_session_id,
+            provider=llm.get_provider_type(),
+            tokens=run.tokens_used,
+        )
         return {
             "agent_id": agent_id,
             "response": response,
@@ -843,7 +851,7 @@ async def invoke_agent(request: Request, agent_id: str, body: InvokeRequest, db:
             model=agent.model,
         )
         await db.commit()
-        logger.error(f"LLM invocation error: {e}")
+        log.error("llm.error", provider=provider_type, agent_id=agent_id, error=str(e))
         return {
             "agent_id": agent_id,
             "response": f"[Persola Error] {str(e)}",
