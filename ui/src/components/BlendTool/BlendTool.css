@@ -1,0 +1,373 @@
+.blend-tool {
+  /* page-container provides padding + max-width */
+}
+
+/* ── Header ─────────────────────────────────────── */
+.blend-header {
+  margin-bottom: 28px;
+}
+
+.blend-title {
+  font-size: 26px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.blend-subtitle {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0;
+}
+
+/* ── Loading / empty ─────────────────────────────── */
+.blend-loading,
+.blend-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  color: var(--text-secondary);
+  gap: 12px;
+}
+
+.blend-empty-icon {
+  font-size: 40px;
+}
+
+/* ── Selector row ────────────────────────────────── */
+.blend-selectors {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 28px;
+}
+
+.blend-selector-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.blend-selector-a {
+  border-top: 3px solid #6366f1;
+}
+
+.blend-selector-b {
+  border-top: 3px solid #10b981;
+}
+
+.blend-selector-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.blend-select {
+  width: 100%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  padding: 10px 12px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.blend-select:focus {
+  border-color: var(--accent);
+}
+
+.blend-selector-desc {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.blend-connector {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 44px;
+}
+
+.blend-connector-icon {
+  font-size: 22px;
+  color: var(--text-muted);
+}
+
+/* ── Ratio slider ────────────────────────────────── */
+.blend-ratio-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 28px;
+}
+
+.blend-ratio-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.blend-ratio-label-a {
+  color: #818cf8;
+}
+
+.blend-ratio-label-b {
+  color: #34d399;
+}
+
+.blend-ratio-pct {
+  font-weight: 700;
+}
+
+.blend-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    #6366f1 0%,
+    #6366f1 calc(var(--ratio, 50%) * 1%),
+    #10b981 calc(var(--ratio, 50%) * 1%),
+    #10b981 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+
+.blend-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  border: 3px solid var(--bg-card);
+  box-shadow: 0 0 0 2px var(--accent);
+  cursor: grab;
+  transition: box-shadow 0.15s;
+}
+
+.blend-slider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  box-shadow: 0 0 0 3px var(--accent-hover);
+}
+
+.blend-ratio-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Knob preview ────────────────────────────────── */
+.blend-preview-section {
+  margin-bottom: 28px;
+}
+
+.blend-preview-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.blend-panels-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 700px) {
+  .blend-panels-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.blend-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.blend-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.blend-panel-icon {
+  font-size: 16px;
+}
+
+.blend-panel-name {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+.blend-panel-knobs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.blend-knob-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.blend-knob-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.blend-knob-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.blend-knob-value {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.blend-knob-track {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  overflow: visible;
+}
+
+.blend-knob-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.12s ease;
+}
+
+/* Ghost markers showing A and B positions */
+.blend-knob-ghost {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.blend-knob-ghost-a {
+  background: #818cf8;
+}
+
+.blend-knob-ghost-b {
+  background: #34d399;
+}
+
+/* ── Save section ────────────────────────────────── */
+.blend-save-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.blend-save-form {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.blend-name-input {
+  flex: 1;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.blend-name-input:focus {
+  border-color: var(--accent);
+}
+
+.blend-name-input::placeholder {
+  color: var(--text-muted);
+}
+
+.blend-save-error {
+  color: var(--error);
+  font-size: 13px;
+  margin: 0;
+}
+
+.blend-saved-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  color: var(--success);
+  font-size: 14px;
+}
+
+.blend-save-again {
+  font-size: 13px;
+  padding: 8px 14px;
+}
+
+/* btn-spinner reuse from TuningLab */
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
