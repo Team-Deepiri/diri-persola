@@ -6,7 +6,6 @@ from pydantic import ValidationError
 from persola.models import (
     AgentConfig,
     AgentMemoryPolicy,
-    CommunicationStyle,
     PersonaProfile,
     PresetName,
 )
