@@ -15,6 +15,24 @@ import structlog
 
 limiter = Limiter(key_func=get_remote_address)
 
+# Token-bucket rate limiter for the invoke endpoint (30-token burst, 0.5 t/s refill).
+# Capacity matches the slowapi limit so both layers agree on the burst ceiling.
+_invoke_bucket = TokenBucketRateLimiter(capacity=30, refill_rate=0.5)
+
+
+async def _invoke_rate_limit(request: Request) -> None:
+    """FastAPI dependency that enforces the token-bucket limit on invoke."""
+    identifier = get_remote_address(request)
+    allowed, remaining = await _invoke_bucket.consume(identifier)
+    if not allowed:
+        # Seconds until one token is available again
+        retry_after = max(1, round(1.0 / _invoke_bucket.refill_rate))
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after), "X-RateLimit-Remaining": "0"},
+        )
+
 from ..analysis import StyleToKnobMapper, WritingStyleExtractor
 from ..models import (
     AgentConfig,
@@ -49,6 +67,7 @@ from ..integrations.llm import get_llm_provider, HAS_CYREX
 from ..integrations.cyrex import CyrexClient, HAS_CYREX
 from ..db import get_db, init_db, close_db, PersonaRepo, AgentRepo
 from ..logging import configure_logging
+from ..cache import TokenBucketRateLimiter
 
 configure_logging()
 log = structlog.get_logger("persola.api")
@@ -752,7 +771,13 @@ async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(ge
 
 @app.post("/api/v1/agents/{agent_id}/invoke")
 @limiter.limit("30/minute")
-async def invoke_agent(request: Request, agent_id: str, body: InvokeRequest, db: AsyncSession = Depends(get_db)):
+async def invoke_agent(
+    request: Request,
+    agent_id: str,
+    body: InvokeRequest,
+    db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_invoke_rate_limit),
+):
     agent_repo = AgentRepository(db)
     agent_run_repo = AgentRunRepository(db)
     persona_repo = PersonaRepository(db)

@@ -239,3 +239,127 @@ def test_analysis_text_at_limit_accepted():
 
     req = AnalysisExtractRequest(text="x" * 50_000)
     assert len(req.text) == 50_000
+
+
+# ---------------------------------------------------------------------------
+# 6.4  Token-bucket rate limiter – unit tests (no Redis required)
+# ---------------------------------------------------------------------------
+
+class _FakeRedis:
+    """Minimal in-memory stand-in for redis.asyncio.Redis used in bucket tests."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, dict[str, str]] = {}
+        self._expiry: dict[str, float] = {}
+
+    async def eval(self, script, numkeys, *args):  # noqa: D401
+        """Execute the Lua token-bucket logic in pure Python."""
+        key = args[0]
+        capacity = float(args[1])
+        refill_rate = float(args[2])
+        now = float(args[3])
+        requested = float(args[4])
+        # ttl = args[5]  # not enforced in the stub
+
+        entry = self._data.get(key, {})
+        tokens = float(entry.get("tokens", capacity))
+        last_refill = float(entry.get("last_refill", now))
+
+        elapsed = max(0.0, now - last_refill)
+        refilled = min(capacity, tokens + elapsed * refill_rate)
+
+        allowed = 0
+        if refilled >= requested:
+            refilled -= requested
+            allowed = 1
+
+        self._data[key] = {"tokens": str(refilled), "last_refill": str(now)}
+        return [allowed, int(refilled)]
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _make_bucket(capacity: int = 5, refill_rate: float = 1.0) -> "TokenBucketRateLimiter":
+    from persola.cache import TokenBucketRateLimiter
+
+    bucket = TokenBucketRateLimiter(capacity=capacity, refill_rate=refill_rate)
+    bucket._redis = _FakeRedis()
+    return bucket
+
+
+@pytest.mark.asyncio
+async def test_token_bucket_allows_up_to_capacity():
+    """[6.4] First N requests (≤ capacity) are all allowed."""
+    bucket = _make_bucket(capacity=5)
+    results = [await bucket.consume("user:a") for _ in range(5)]
+    assert all(allowed for allowed, _ in results), "All requests within capacity should pass"
+
+
+@pytest.mark.asyncio
+async def test_token_bucket_blocks_over_capacity():
+    """[6.4] Request beyond capacity is denied immediately (no time elapsed)."""
+    bucket = _make_bucket(capacity=3)
+    for _ in range(3):
+        await bucket.consume("user:b")
+    allowed, remaining = await bucket.consume("user:b")
+    assert not allowed, "Request beyond capacity should be blocked"
+    assert remaining == 0
+
+
+@pytest.mark.asyncio
+async def test_token_bucket_remaining_decrements():
+    """[6.4] Remaining token count decreases with each consumed request."""
+    bucket = _make_bucket(capacity=4)
+    _, r0 = await bucket.consume("user:c")
+    _, r1 = await bucket.consume("user:c")
+    assert r1 < r0, "Remaining tokens should decrease after each request"
+
+
+@pytest.mark.asyncio
+async def test_token_bucket_refills_over_time():
+    """[6.4] After waiting, tokens are replenished and a new request is allowed."""
+    import time
+
+    bucket = _make_bucket(capacity=2, refill_rate=1.0)
+    # Drain the bucket
+    for _ in range(2):
+        await bucket.consume("user:d")
+    # Simulate 3 seconds of elapsed time using the fake Redis directly
+    fake = bucket._redis
+    key = bucket._key("user:d")
+    entry = fake._data[key]
+    entry["last_refill"] = str(float(entry["last_refill"]) - 3.0)
+
+    allowed, remaining = await bucket.consume("user:d")
+    assert allowed, "Refilled bucket should allow a new request"
+    assert remaining >= 0
+
+
+@pytest.mark.asyncio
+async def test_token_bucket_keys_are_isolated():
+    """[6.4] Different identifiers maintain independent buckets."""
+    bucket = _make_bucket(capacity=1)
+    allowed_x, _ = await bucket.consume("user:x")
+    allowed_y, _ = await bucket.consume("user:y")
+    assert allowed_x and allowed_y, "Each identifier should start with a full bucket"
+
+
+@pytest.mark.asyncio
+async def test_token_bucket_fails_open_on_redis_error():
+    """[6.4] Redis failure → fail open (request allowed, capacity returned)."""
+    from persola.cache import TokenBucketRateLimiter
+
+    class _BrokenRedis:
+        async def eval(self, *args, **kwargs):
+            raise ConnectionError("redis down")
+
+        async def aclose(self):
+            pass
+
+    bucket = TokenBucketRateLimiter(capacity=10, refill_rate=1.0)
+    bucket._redis = _BrokenRedis()
+    allowed, remaining = await bucket.consume("user:broken")
+    assert allowed, "Should fail open when Redis is unreachable"
+    assert remaining == bucket.capacity
+
