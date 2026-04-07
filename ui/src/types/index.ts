@@ -142,8 +142,40 @@ export interface BlendRequest {
   ratio: number;
 }
 
+export interface Session {
+  id: string;
+  agent_id: string;
+  session_id: string;
+  metadata: Record<string, unknown>;
+  message_count: number;
+  last_message_at: string | null;
+  created_at: string;
+}
+
+export interface Message {
+  id: string;
+  session_id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  metadata: Record<string, unknown>;
+  tokens_used: number | null;
+  model: string | null;
+  created_at: string;
+}
+
+export interface AnalysisExtractResponse {
+  knobs: Record<string, number>;
+  confidence: number;
+  notes: string;
+  persona_id: string | null;
+}
+
+/** Alias for AnalysisExtractResponse */
+export type StyleAnalysis = AnalysisExtractResponse;
+
 export interface InvokeRequest {
   message: string;
+  session_id?: string;
   history?: Array<{ role: string; content: string }>;
 }
 
