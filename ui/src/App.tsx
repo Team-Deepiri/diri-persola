@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { NavLink, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { TuningLab } from './components/TuningLab';
 import { AgentManager } from './components/AgentManager';
@@ -9,8 +8,6 @@ import { BlendTool } from './components/BlendTool';
 import { PersonaLibrary } from './components/PersonaLibrary';
 import './App.css';
 
-type View = 'tuning-lab' | 'agent-playground';
-
 function AgentChatPage() {
   const { id } = useParams<{ id: string }>();
   return <ConversationView initialAgentId={id} />;
@@ -20,18 +17,6 @@ const navCls = ({ isActive }: { isActive: boolean }) =>
   `nav-item${isActive ? ' active' : ''}`;
 
 function App() {
-  const [currentView, setCurrentView] = useState<View>('tuning-lab');
-
-  const renderMainContent = () => {
-    switch (currentView) {
-      case 'tuning-lab':
-        return <TuningLab />;
-      case 'agent-playground':
-        return <AgentPlayground />;
-      default:
-        return <TuningLab />;
-    }
-  };
 
   return (
     <div className="app">
@@ -83,12 +68,12 @@ function App() {
       </aside>
 
       <main className="main-content">
-        {renderMainContent()}
         <Routes>
           <Route path="/" element={<TuningLab />} />
           <Route path="/personas" element={<PersonaLibrary />} />
           <Route path="/agents" element={<div className="page-container"><AgentManager /></div>} />
           <Route path="/agents/:id/chat" element={<AgentChatPage />} />
+          <Route path="/agent-playground" element={<AgentPlayground />} />
           <Route path="/analyze" element={<AnalysisView />} />
           <Route path="/blend" element={<BlendTool />} />
           <Route path="*" element={<Navigate to="/" replace />} />
