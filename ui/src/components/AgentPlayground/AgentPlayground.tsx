@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { agentsApi } from '../../api';
-import type { AgentConfig, InvokeRequest, InvokeResponse } from '../../types';
+import type { AgentConfig, InvokeRequest } from '../../types';
 import './AgentPlayground.css';
 
 interface Message {
@@ -10,18 +10,12 @@ interface Message {
   timestamp: Date;
 }
 
-interface Session {
-  id: string;
-  name: string;
-}
-
 export const AgentPlayground: React.FC = () => {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<AgentConfig | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentMessage, setCurrentMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [currentSession, setCurrentSession] = useState<string>('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
