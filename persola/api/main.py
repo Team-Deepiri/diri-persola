@@ -1,14 +1,37 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, List, Optional
 import uuid
 import os
-import logging
+import structlog
+
+limiter = Limiter(key_func=get_remote_address)
+
+# Token-bucket rate limiter for the invoke endpoint (30-token burst, 0.5 t/s refill).
+# Capacity matches the slowapi limit so both layers agree on the burst ceiling.
+_invoke_bucket = TokenBucketRateLimiter(capacity=30, refill_rate=0.5)
+
+
+async def _invoke_rate_limit(request: Request) -> None:
+    """FastAPI dependency that enforces the token-bucket limit on invoke."""
+    identifier = get_remote_address(request)
+    allowed, remaining = await _invoke_bucket.consume(identifier)
+    if not allowed:
+        # Seconds until one token is available again
+        retry_after = max(1, round(1.0 / _invoke_bucket.refill_rate))
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after), "X-RateLimit-Remaining": "0"},
+        )
 
 from ..analysis import StyleToKnobMapper, WritingStyleExtractor
 from ..models import (
@@ -31,21 +54,31 @@ from ..db.repositories import (
     SessionRepository,
 )
 from ..db.services import PersonaService
+from ..auth import APIKeyAuth
+from ..metrics import (
+    MetricsMiddleware,
+    metrics_endpoint,
+    record_llm_tokens,
+    set_agents_total,
+    set_personas_total,
+)
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
 from ..integrations.cyrex import CyrexClient, HAS_CYREX
 from ..db import get_db, init_db, close_db, PersonaRepo, AgentRepo
+from ..logging import configure_logging
+from ..cache import TokenBucketRateLimiter
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("persola.api")
+configure_logging()
+log = structlog.get_logger("persola.api")
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Startup: init DB, seed presets. Shutdown: dispose connection pool."""
     
-    logger.info("Initializing database...")
+    log.info("db.init")
     await init_db()
-    logger.info("Database ready.")
+    log.info("db.ready")
 
     # Seed presets once at startup (idempotent)
     async for db in get_db():
@@ -56,7 +89,7 @@ async def lifespan(application: FastAPI):
 
     yield
 
-    logger.info("Shutting down database...")
+    log.info("db.shutdown")
     await close_db()
 
 app = FastAPI(
@@ -66,6 +99,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(APIKeyAuth)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -162,6 +199,9 @@ async def root(db: AsyncSession = Depends(get_db)):
     return {"message": "Persola API", "version": "0.1.0"}
 
 
+app.add_route("/metrics", metrics_endpoint, methods=["GET"])
+
+
 @app.get("/health")
 async def health(db: AsyncSession = Depends(get_db)):
     db_ok = await check_db_health()
@@ -211,14 +251,14 @@ async def validate_knobs(knobs: Dict[str, float], db: AsyncSession = Depends(get
 
 
 class AnalysisExtractRequest(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=50_000)
     create_persona: bool = False
-    persona_name: str | None = None
+    persona_name: str | None = Field(default=None, max_length=200)
 
 
 class AnalysisCreateRequest(BaseModel):
-    text: str = Field(min_length=1)
-    name: str = Field(min_length=1, max_length=255)
+    text: str = Field(min_length=1, max_length=50_000)
+    name: str = Field(min_length=1, max_length=200)
 
 
 class AnalysisExtractResponse(BaseModel):
@@ -238,13 +278,14 @@ async def _run_style_analysis(text: str) -> tuple[dict[str, float], float, str]:
 
 
 @app.post("/api/v1/analysis/extract", response_model=AnalysisExtractResponse)
-async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
-    knobs, confidence, notes = await _run_style_analysis(request.text)
+@limiter.limit("10/minute")
+async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
+    knobs, confidence, notes = await _run_style_analysis(body.text)
     persona_id: str | None = None
     persona_uuid: UUID | None = None
 
-    if request.create_persona:
-        persona_name = request.persona_name or "Writing Style Persona"
+    if body.create_persona:
+        persona_name = body.persona_name or "Writing Style Persona"
         repo = PersonaRepository(db)
         persona = _build_persona_from_knobs(persona_name, knobs, notes)
         created = await repo.create(_to_persona_model(persona))
@@ -254,7 +295,7 @@ async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = D
 
     await _record_analysis_run(
         db,
-        text=request.text,
+        text=body.text,
         knobs=knobs,
         confidence=confidence,
         notes=notes,
@@ -305,6 +346,9 @@ async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get
     )
 
     await db.commit()
+    log.info("persona.created", persona_id=str(created.id), name=created.name)
+    personas = await PersonaRepository(db).count()
+    set_personas_total(personas)
     return _to_persona_profile(created)
 
 
@@ -376,6 +420,8 @@ async def delete_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     if not deleted:
         raise HTTPException(status_code=404, detail="Persona not found")
     await db.commit()
+    count = await repo.count()
+    set_personas_total(count)
     return {"deleted": True}
 
 
@@ -506,6 +552,8 @@ async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     # Return API-friendly config
+    agents = await agent_repo.count()
+    set_agents_total(agents)
     return _to_agent_config(created)  
 
 
@@ -563,6 +611,8 @@ async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent not found")
     await db.commit()
+    count = await repo.count()
+    set_agents_total(count)
 
 
 @app.get("/api/v1/agents/{agent_id}/sessions")
@@ -609,7 +659,7 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
 
 
 class InvokeRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=32_768)
     session_id: Optional[str] = None
     history: Optional[List[Dict[str, str]]] = None
 
@@ -678,7 +728,7 @@ async def list_cyrex_agents(db: AsyncSession = Depends(get_db)):
     try:
         return {"agents": await cyrex_client.list_cyrex_agents()}
     except Exception as e:
-        logger.error(f"Cyrex list agents error: {e}")
+        log.error("cyrex.list_agents.error", error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex request failed: {str(e)}") from e
 
 
@@ -699,7 +749,7 @@ async def sync_persona_to_cyrex(persona_id: str, db: AsyncSession = Depends(get_
             "cyrex_response": payload,
         }
     except Exception as e:
-        logger.error(f"Cyrex sync error: {e}")
+        log.error("cyrex.sync.error", persona_id=persona_id, error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex sync failed: {str(e)}") from e
 
 
@@ -715,12 +765,19 @@ async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(ge
         await db.commit()
         return _to_persona_profile(created)
     except Exception as e:
-        logger.error(f"Cyrex import error: {e}")
+        log.error("cyrex.import.error", cyrex_id=cyrex_id, error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex import failed: {str(e)}") from e
 
 
 @app.post("/api/v1/agents/{agent_id}/invoke")
-async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def invoke_agent(
+    request: Request,
+    agent_id: str,
+    body: InvokeRequest,
+    db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_invoke_rate_limit),
+):
     agent_repo = AgentRepository(db)
     agent_run_repo = AgentRunRepository(db)
     persona_repo = PersonaRepository(db)
@@ -731,15 +788,15 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    runtime_session_id = request.session_id or f"{agent_id}-default"
+    runtime_session_id = body.session_id or f"{agent_id}-default"
     session = await session_repo.get_or_create(agent.id, runtime_session_id)
-    await message_repo.add(session.id, "user", request.message)
+    await message_repo.add(session.id, "user", body.message)
     run = await agent_run_repo.create(
         AgentRunModel(
             agent_id=agent.id,
             session_id=session.id,
             status="running",
-            request_message=request.message,
+            request_message=body.message,
             model=agent.model,
             run_metadata={"requested_at": datetime.utcnow().isoformat()},
         )
@@ -757,7 +814,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
         return {
             "agent_id": agent_id,
             "response": "[Persola] Cyrex not available. Install dependencies to enable LLM inference.",
-            "message": request.message,
+            "message": body.message,
             "provider": "none",
         }
     
@@ -787,7 +844,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             return {
                 "agent_id": agent_id,
                 "response": "[Persola] No LLM provider available. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or ensure Ollama is running.",
-                "message": request.message,
+                "message": body.message,
                 "provider": provider_type,
             }
 
@@ -796,7 +853,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             engine.build_system_prompt(_to_persona_profile(profile)) if profile else ""
         )
         
-        full_prompt = f"{system_prompt}\n\nUser: {request.message}\n\nAssistant:" if system_prompt else request.message
+        full_prompt = f"{system_prompt}\n\nUser: {body.message}\n\nAssistant:" if system_prompt else body.message
         
         response = await llm.generate(full_prompt)
 
@@ -815,11 +872,22 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             model=agent.model,
         )
         await db.commit()
-        
+        log.info(
+            "agent.invoked",
+            agent_id=agent_id,
+            session_id=runtime_session_id,
+            provider=llm.get_provider_type(),
+            tokens=run.tokens_used,
+        )
+        record_llm_tokens(
+            provider=llm.get_provider_type(),
+            model=agent.model or "unknown",
+            tokens=run.tokens_used or 0,
+        )
         return {
             "agent_id": agent_id,
             "response": response,
-            "message": request.message,
+            "message": body.message,
             "provider": llm.get_provider_type(),
         }
         
@@ -832,11 +900,11 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             model=agent.model,
         )
         await db.commit()
-        logger.error(f"LLM invocation error: {e}")
+        log.error("llm.error", provider=provider_type, agent_id=agent_id, error=str(e))
         return {
             "agent_id": agent_id,
             "response": f"[Persola Error] {str(e)}",
-            "message": request.message,
+            "message": body.message,
             "error": str(e),
         }
 
