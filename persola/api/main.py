@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, List, Optional
 import uuid
 import os
+from pathlib import Path
 import structlog
 
 from ..cache import TokenBucketRateLimiter
@@ -950,18 +951,23 @@ async def get_ui(db: AsyncSession = Depends(get_db)):
 
 @app.get("/static/{path:path}")
 async def get_static(path: str, db: AsyncSession = Depends(get_db)):
-    static_root = os.path.realpath(
-        os.path.join(os.path.dirname(__file__), "..", "ui", "static")
-    )
-    static_path = os.path.realpath(os.path.join(static_root, path))
+    static_root = Path(os.path.dirname(__file__), "..", "ui", "static").resolve()
+    requested_path = Path(path)
 
-    if os.path.commonpath([static_root, static_path]) != static_root:
+    if requested_path.is_absolute() or ".." in requested_path.parts or "\x00" in path:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    if not os.path.isfile(static_path):
+    static_path = (static_root / requested_path).resolve()
+
+    try:
+        static_path.relative_to(static_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not static_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(static_path)
+    return FileResponse(str(static_path))
 
 
 def main():
