@@ -33,7 +33,7 @@ class OllamaClient:
             import requests
             resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
             return resp.status_code == 200
-        except:
+        except (ImportError, requests.RequestException):
             return False
     
     async def generate(self, prompt: str) -> str:
