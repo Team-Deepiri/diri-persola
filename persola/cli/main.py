@@ -7,7 +7,7 @@ from .commands.agent import agent_group
 from .commands.analyze import analyze_command
 from .commands.persona import persona_group
 from .commands.preset import preset_group
-from .output import console, print_json, print_status_table
+from .output import print_json, print_status_table
 
 
 @click.group()
