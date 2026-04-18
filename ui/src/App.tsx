@@ -1,6 +1,7 @@
 import { NavLink, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { TuningLab } from './components/TuningLab';
 import { AgentManager } from './components/AgentManager';
+import { AgentPlayground } from './components/AgentPlayground';
 import { ConversationView } from './components/Conversation';
 import { AnalysisView } from './components/Analysis';
 import { BlendTool } from './components/BlendTool';
@@ -16,6 +17,7 @@ const navCls = ({ isActive }: { isActive: boolean }) =>
   `nav-item${isActive ? ' active' : ''}`;
 
 function App() {
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -27,18 +29,29 @@ function App() {
         <nav className="nav">
           <div className="nav-section">
             <div className="nav-title">Persona</div>
-            <NavLink to="/" end className={navCls}>
+           
+          <NavLink to="/" end className={navCls}>
               <span>🎛️</span> Tuning Lab
             </NavLink>
+
             <NavLink to="/personas" className={navCls}>
               <span>👤</span> Personas
+            </NavLink>
+
+            <NavLink to="/presets" className={navCls}>
+              <span>📋</span> Presets
             </NavLink>
           </div>
 
           <div className="nav-section">
             <div className="nav-title">Runtime</div>
+
             <NavLink to="/agents" className={navCls}>
               <span>🤖</span> Agents
+            </NavLink>
+
+            <NavLink to="/agent-playground" className={navCls}>
+              <span>🧪</span> Agent Playground
             </NavLink>
           </div>
 
@@ -60,6 +73,7 @@ function App() {
           <Route path="/personas" element={<PersonaLibrary />} />
           <Route path="/agents" element={<div className="page-container"><AgentManager /></div>} />
           <Route path="/agents/:id/chat" element={<AgentChatPage />} />
+          <Route path="/agent-playground" element={<AgentPlayground />} />
           <Route path="/analyze" element={<AnalysisView />} />
           <Route path="/blend" element={<BlendTool />} />
           <Route path="*" element={<Navigate to="/" replace />} />

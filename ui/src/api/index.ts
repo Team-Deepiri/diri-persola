@@ -9,7 +9,6 @@ import type {
   InvokeResponse,
   Session,
   Message,
-  AnalysisExtractResponse,
   StyleAnalysis,
 } from '../types';
 
