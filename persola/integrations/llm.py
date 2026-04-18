@@ -2,7 +2,7 @@
 LLM Integration for Persola
 Uses Ollama by default, falls back to OpenAI/Anthropic if API keys are provided
 """
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator
 import os
 import structlog
 import httpx
