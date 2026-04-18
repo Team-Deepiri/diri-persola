@@ -1,9 +1,10 @@
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, List, Optional
@@ -18,6 +19,7 @@ from ..models import (
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
 from ..db import get_db, init_db, close_db, PersonaRepo, AgentRepo
+from ..db.config import async_session
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("persola.api")
@@ -28,6 +30,10 @@ async def lifespan(application: FastAPI):
     """Startup: create tables. Shutdown: dispose connection pool."""
     logger.info("Initialising database …")
     await init_db()
+    async with async_session() as db:
+        seeded = await PersonaRepo(db).seed_presets(DEFAULT_PRESETS)
+        await db.commit()
+        logger.info("Preset seeding complete: %s new presets inserted.", seeded)
     logger.info("Database ready.")
     yield
     logger.info("Shutting down database …")
@@ -50,6 +56,14 @@ app.add_middleware(
 )
 
 engine = PersonaEngine()
+
+
+def get_repo(db: AsyncSession = Depends(get_db)) -> PersonaRepo:
+    return PersonaRepo(db)
+
+
+class ClonePersonaRequest(BaseModel):
+    name: str
 
 
 @app.get("/")
@@ -117,6 +131,18 @@ async def list_personas(db: AsyncSession = Depends(get_db)):
     return await repo.list_all()
 
 
+@app.get("/api/v1/personas/search", response_model=List[PersonaProfile])
+async def search_personas(q: str, repo: PersonaRepo = Depends(get_repo)):
+    return await repo.search(q)
+
+
+@app.post("/api/v1/personas/import", response_model=PersonaProfile)
+async def import_persona(persona: PersonaProfile, repo: PersonaRepo = Depends(get_repo)):
+    imported = persona.model_copy(deep=True)
+    imported.id = f"persona_{uuid.uuid4().hex[:8]}"
+    return await repo.create(imported)
+
+
 @app.get("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
 async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepo(db)
@@ -124,6 +150,26 @@ async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
     return persona
+
+
+@app.post("/api/v1/personas/{persona_id}/clone", response_model=PersonaProfile)
+async def clone_persona(persona_id: str, request: ClonePersonaRequest, repo: PersonaRepo = Depends(get_repo)):
+    cloned = await repo.clone(persona_id, request.name)
+    if cloned is None:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    return cloned
+
+
+@app.get("/api/v1/personas/{persona_id}/export")
+async def export_persona(persona_id: str, repo: PersonaRepo = Depends(get_repo)):
+    persona = await repo.get(persona_id)
+    if persona is None:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    return JSONResponse(
+        content=jsonable_encoder(persona),
+        headers={"Content-Disposition": f'attachment; filename="{persona_id}.json"'},
+    )
 
 
 @app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
@@ -239,7 +285,6 @@ async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
 async def list_agents(db: AsyncSession = Depends(get_db)):
     repo = AgentRepo(db)
     return await repo.list_all()
-
 
 @app.get("/api/v1/agents/{agent_id}", response_model=AgentConfig)
 async def get_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
