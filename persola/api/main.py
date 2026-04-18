@@ -967,7 +967,8 @@ async def get_static(path: str, db: AsyncSession = Depends(get_db)):
     ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    static_path = (static_root / requested_path).resolve(strict=False)
+    normalized_rel = os.path.normpath(path).lstrip("/\\")
+    static_path = (static_root / normalized_rel).resolve(strict=False)
     try:
         static_path.relative_to(static_root)
     except ValueError:
