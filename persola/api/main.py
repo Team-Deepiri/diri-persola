@@ -924,20 +924,21 @@ async def invoke_agent(
         }
         
     except Exception as e:
+        generic_error_message = "[Persola Error] An internal error has occurred."
         await agent_run_repo.mark_completed(
             run.id,
             status="failed",
-            response_message=f"[Persola Error] {str(e)}",
+            response_message=generic_error_message,
             provider=None,
             model=agent.model,
         )
         await db.commit()
-        log.error("llm.error", provider=provider_type, agent_id=agent_id, error=str(e))
+        log.error("llm.error", provider=provider_type, agent_id=agent_id, error=str(e), exc_info=True)
         return {
             "agent_id": agent_id,
-            "response": f"[Persola Error] {str(e)}",
+            "response": generic_error_message,
             "message": body.message,
-            "error": str(e),
+            "error": "internal_error",
         }
 
 
