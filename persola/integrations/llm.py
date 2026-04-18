@@ -75,8 +75,8 @@ class OllamaClient:
                                 j = json.loads(data)
                                 if "response" in j:
                                     yield j["response"]
-                        except (ValueError, TypeError):
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            log.debug("Skipping non-JSON or malformed streaming chunk", error=str(exc), chunk=line)
 
 
 class OpenAIClientWrapper:
