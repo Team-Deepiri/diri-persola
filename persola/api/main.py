@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from datetime import datetime
 from uuid import UUID
+import re
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -20,6 +21,7 @@ import structlog
 from ..cache import TokenBucketRateLimiter
 
 limiter = Limiter(key_func=get_remote_address)
+SAFE_STATIC_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Token-bucket rate limiter for the invoke endpoint (30-token burst, 0.5 t/s refill).
 # Capacity matches the slowapi limit so both layers agree on the burst ceiling.
@@ -954,7 +956,15 @@ async def get_static(path: str, db: AsyncSession = Depends(get_db)):
     static_root = Path(os.path.dirname(__file__), "..", "ui", "static").resolve()
     requested_path = Path(path)
 
-    if requested_path.is_absolute() or ".." in requested_path.parts or "\x00" in path:
+    if requested_path.is_absolute() or "\x00" in path:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    parts = requested_path.parts
+    if (
+        not parts
+        or any(part in ("", ".", "..") for part in parts)
+        or any(not SAFE_STATIC_SEGMENT.fullmatch(part) for part in parts)
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     static_path = (static_root / requested_path).resolve()
