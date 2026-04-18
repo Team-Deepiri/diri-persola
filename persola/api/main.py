@@ -967,17 +967,17 @@ async def get_static(path: str, db: AsyncSession = Depends(get_db)):
     ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    static_path = (static_root / requested_path).resolve()
+    static_root_real = os.path.realpath(static_root)
+    static_path_real = os.path.realpath(os.path.join(static_root_real, path))
 
-    try:
-        static_path.relative_to(static_root)
-    except ValueError:
+    if os.path.commonpath([static_root_real, static_path_real]) != static_root_real:
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    static_path = Path(static_path_real)
     if not static_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
 
-    return FileResponse(str(static_path))
+    return FileResponse(static_path_real)
 
 
 def main():
