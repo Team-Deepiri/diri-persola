@@ -949,7 +949,17 @@ async def get_ui(db: AsyncSession = Depends(get_db)):
 
 @app.get("/static/{path:path}")
 async def get_static(path: str, db: AsyncSession = Depends(get_db)):
-    static_path = os.path.join(os.path.dirname(__file__), "..", "ui", "static", path)
+    static_root = os.path.realpath(
+        os.path.join(os.path.dirname(__file__), "..", "ui", "static")
+    )
+    static_path = os.path.realpath(os.path.join(static_root, path))
+
+    if os.path.commonpath([static_root, static_path]) != static_root:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not os.path.isfile(static_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
     return FileResponse(static_path)
 
 
