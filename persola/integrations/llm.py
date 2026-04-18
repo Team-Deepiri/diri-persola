@@ -75,7 +75,7 @@ class OllamaClient:
                                 j = json.loads(data)
                                 if "response" in j:
                                     yield j["response"]
-                        except:
+                        except (ValueError, TypeError):
                             pass
 
 
