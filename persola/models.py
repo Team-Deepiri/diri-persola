@@ -1,5 +1,5 @@
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, Field, computed_field
 from datetime import datetime
 from enum import Enum
 
@@ -15,10 +15,80 @@ class PresetName(str, Enum):
     EDUCATIONAL = "educational"
 
 
+class CommunicationStyle(BaseModel):
+    creativity: float = Field(default=0.5, ge=0.0, le=1.0)
+    humor: float = Field(default=0.5, ge=0.0, le=1.0)
+    formality: float = Field(default=0.5, ge=0.0, le=1.0)
+    verbosity: float = Field(default=0.5, ge=0.0, le=1.0)
+    empathy: float = Field(default=0.5, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class PersonalityTraits(BaseModel):
+    openness: float = Field(default=0.5, ge=0.0, le=1.0)
+    conscientiousness: float = Field(default=0.5, ge=0.0, le=1.0)
+    extraversion: float = Field(default=0.5, ge=0.0, le=1.0)
+    agreeableness: float = Field(default=0.5, ge=0.0, le=1.0)
+    neuroticism: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class CognitiveStyle(BaseModel):
+    reasoning_depth: float = Field(default=0.5, ge=0.0, le=1.0)
+    step_by_step: float = Field(default=0.5, ge=0.0, le=1.0)
+    creativity_in_reasoning: float = Field(default=0.5, ge=0.0, le=1.0)
+    synthetics: float = Field(default=0.5, ge=0.0, le=1.0)
+    abstraction: float = Field(default=0.5, ge=0.0, le=1.0)
+    patterns: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class ReliabilityProfile(BaseModel):
+    accuracy: float = Field(default=0.8, ge=0.0, le=1.0)
+    reliability: float = Field(default=0.8, ge=0.0, le=1.0)
+    caution: float = Field(default=0.5, ge=0.0, le=1.0)
+    consistency: float = Field(default=0.8, ge=0.0, le=1.0)
+    self_correction: float = Field(default=0.5, ge=0.0, le=1.0)
+    transparency: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class ModelSettings(BaseModel):
+    system_prompt: str = ""
+    model: str = "llama3:8b"
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=2000, ge=1, le=32000)
+
+
+class AgentTool(BaseModel):
+    name: str
+    enabled: bool = True
+    description: str = ""
+    config: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentMemoryPolicy(BaseModel):
+    enabled: bool = True
+    session_scope: str = "conversation"
+    history_window: int = Field(default=50, ge=1, le=1000)
+
+
+PERSONA_KNOB_GROUPS: Dict[str, tuple[str, ...]] = {
+    "communication": ("creativity", "humor", "formality", "verbosity", "empathy", "confidence"),
+    "personality": ("openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism"),
+    "cognitive": (
+        "reasoning_depth",
+        "step_by_step",
+        "creativity_in_reasoning",
+        "synthetics",
+        "abstraction",
+        "patterns",
+    ),
+    "reliability": ("accuracy", "reliability", "caution", "consistency", "self_correction", "transparency"),
+}
+
+
 class PersonaProfile(BaseModel):
     id: str = Field(default_factory=lambda: f"persona_{datetime.utcnow().timestamp()}")
-    name: str = "Untitled Persona"
-    description: str = ""
+    name: str = Field(default="Untitled Persona", max_length=200)
+    description: str = Field(default="", max_length=2000)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
@@ -53,6 +123,65 @@ class PersonaProfile(BaseModel):
     model: str = "llama3:8b"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2000, ge=1, le=32000)
+
+    @computed_field(return_type=CommunicationStyle)
+    def communication_style(self) -> CommunicationStyle:
+        return CommunicationStyle(**{key: getattr(self, key) for key in PERSONA_KNOB_GROUPS["communication"]})
+
+    @computed_field(return_type=PersonalityTraits)
+    def personality_traits(self) -> PersonalityTraits:
+        return PersonalityTraits(**{key: getattr(self, key) for key in PERSONA_KNOB_GROUPS["personality"]})
+
+    @computed_field(return_type=CognitiveStyle)
+    def cognitive_style(self) -> CognitiveStyle:
+        return CognitiveStyle(**{key: getattr(self, key) for key in PERSONA_KNOB_GROUPS["cognitive"]})
+
+    @computed_field(return_type=ReliabilityProfile)
+    def reliability_profile(self) -> ReliabilityProfile:
+        return ReliabilityProfile(**{key: getattr(self, key) for key in PERSONA_KNOB_GROUPS["reliability"]})
+
+    @computed_field(return_type=ModelSettings)
+    def model_settings(self) -> ModelSettings:
+        return ModelSettings(
+            system_prompt=self.system_prompt,
+            model=self.model,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+
+    @computed_field(return_type=Dict[str, float])
+    def knobs(self) -> Dict[str, float]:
+        return self.get_knobs()
+
+    @classmethod
+    def from_components(
+        cls,
+        *,
+        name: str,
+        description: str = "",
+        communication: CommunicationStyle | None = None,
+        personality: PersonalityTraits | None = None,
+        cognitive: CognitiveStyle | None = None,
+        reliability: ReliabilityProfile | None = None,
+        settings: ModelSettings | None = None,
+    ) -> "PersonaProfile":
+        communication = communication or CommunicationStyle()
+        personality = personality or PersonalityTraits()
+        cognitive = cognitive or CognitiveStyle()
+        reliability = reliability or ReliabilityProfile()
+        settings = settings or ModelSettings()
+        return cls(
+            name=name,
+            description=description,
+            system_prompt=settings.system_prompt,
+            model=settings.model,
+            temperature=settings.temperature,
+            max_tokens=settings.max_tokens,
+            **communication.model_dump(),
+            **personality.model_dump(),
+            **cognitive.model_dump(),
+            **reliability.model_dump(),
+        )
 
     def get_knobs(self) -> Dict[str, float]:
         return {
@@ -181,7 +310,7 @@ DEFAULT_PRESETS: Dict[PresetName, PersonaProfile] = {
 
 class AgentConfig(BaseModel):
     agent_id: str = Field(default_factory=lambda: f"agent_{datetime.utcnow().timestamp()}")
-    name: str = "Persola Agent"
+    name: str = Field(default="Persola Agent", max_length=200)
     role: str = "assistant"
     model: str = "llama3:8b"
     temperature: float = 0.7
@@ -191,6 +320,14 @@ class AgentConfig(BaseModel):
     tools: List[str] = Field(default_factory=list)
     memory_enabled: bool = True
     session_id: Optional[str] = None
+
+    @computed_field(return_type=List[AgentTool])
+    def tool_configs(self) -> List[AgentTool]:
+        return [AgentTool(name=tool_name) for tool_name in self.tools]
+
+    @computed_field(return_type=AgentMemoryPolicy)
+    def memory_policy(self) -> AgentMemoryPolicy:
+        return AgentMemoryPolicy(enabled=self.memory_enabled)
 
 
 class KnobDefinition(BaseModel):

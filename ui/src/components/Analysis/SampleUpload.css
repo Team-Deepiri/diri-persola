@@ -1,0 +1,223 @@
+.sample-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Intro ── */
+.upload-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.upload-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.upload-subtitle {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin: 0;
+  max-width: 680px;
+  line-height: 1.6;
+}
+
+/* ── Drop zone ── */
+.drop-zone {
+  position: relative;
+  min-height: 240px;
+  border: 2px dashed var(--border-light);
+  border-radius: 16px;
+  background: var(--bg-card);
+  transition: border-color 0.2s, background 0.2s;
+  cursor: text;
+  overflow: hidden;
+}
+
+.drop-zone:not(.has-content):hover,
+.drop-zone:focus-within {
+  border-color: var(--accent);
+}
+
+.drop-zone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Overlay hint shown when no text */
+.drop-zone-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+  padding: 24px;
+  text-align: center;
+  transition: opacity 0.15s;
+}
+
+.drop-zone.has-content .drop-zone-hint {
+  display: none;
+}
+
+.drop-zone-icon {
+  font-size: 40px;
+  margin-bottom: 4px;
+}
+
+.drop-zone-primary {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.drop-zone-secondary {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.drop-zone-link {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  pointer-events: all;
+}
+
+/* ── Textarea (always present, fills zone) ── */
+.sample-textarea {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.65;
+  padding: 20px;
+  resize: none;
+  outline: none;
+  overflow-y: auto;
+}
+
+.sample-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Hidden file input */
+.file-input-hidden {
+  display: none;
+}
+
+/* ── Status row ── */
+.upload-status-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.upload-counters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.counter {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.counter-words {
+  border-left: 1px solid var(--border);
+  padding-left: 12px;
+}
+
+.counter-warn {
+  color: var(--warning);
+}
+
+.counter-error {
+  color: var(--error);
+}
+
+.upload-file-error {
+  font-size: 13px;
+  color: var(--error);
+  margin: 0;
+}
+
+.upload-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+/* ── Shared button styles ── */
+.btn {
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-secondary {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--border-light);
+  color: var(--text-primary);
+}
+
+/* Inline spinner inside Analyze button */
+.btn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, type ChangeEvent } from 'react';
+import { useLocation } from 'react-router-dom';
 import { KnobPanel } from '../KnobPanel';
 import { Presets } from '../Presets';
 import { knobsApi, presetsApi, personasApi } from '../../api';
-import type { KnobDefinition, Preset, PanelName } from '../../types';
+import type { KnobDefinition, PersonaProfile, Preset, PanelName } from '../../types';
 import { PANELS } from '../../types';
 import './TuningLab.css';
 
@@ -14,15 +15,23 @@ const DEFAULT_KNOBS: Record<string, number> = {
 };
 
 export function TuningLab() {
+  const location = useLocation();
+  const incomingPersona = (location.state as { persona?: PersonaProfile } | null)?.persona ?? null;
+
   const [knobs, setKnobs] = useState<KnobDefinition[]>([]);
   const [presets, setPresets] = useState<Record<string, Preset>>({});
   const [activePreset, setActivePreset] = useState<string | null>(null);
-  const [values, setValues] = useState<Record<string, number>>(DEFAULT_KNOBS);
-  const [personaName, setPersonaName] = useState('My Assistant');
-  const [personaDescription, setPersonaDescription] = useState('A helpful and versatile AI assistant');
-  const [currentPersonaId, setCurrentPersonaId] = useState<string | null>(null);
+  const [values, setValues] = useState<Record<string, number>>(
+    incomingPersona ? { ...DEFAULT_KNOBS, ...incomingPersona.knobs } : DEFAULT_KNOBS,
+  );
+  const [personaName, setPersonaName] = useState(incomingPersona?.name ?? 'My Assistant');
+  const [personaDescription, setPersonaDescription] = useState(
+    incomingPersona?.description ?? 'A helpful and versatile AI assistant',
+  );
+  const [currentPersonaId, setCurrentPersonaId] = useState<string | null>(incomingPersona?.id ?? null);
   const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadData();
@@ -88,6 +97,44 @@ export function TuningLab() {
     setSaving(false);
   };
 
+  const handleExport = () => {
+    const payload = { name: personaName, description: personaDescription, knobs: values };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `persona-${personaName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const data = JSON.parse(ev.target?.result as string);
+        if (data.name) setPersonaName(data.name);
+        if (data.description) setPersonaDescription(data.description);
+        const knobData: Record<string, number> = data.knobs ?? data;
+        const merged: Record<string, number> = {};
+        for (const key of Object.keys(DEFAULT_KNOBS)) {
+          if (typeof knobData[key] === 'number') merged[key] = knobData[key];
+        }
+        if (Object.keys(merged).length > 0) {
+          setValues(prev => ({ ...prev, ...merged }));
+          setActivePreset(null);
+          setCurrentPersonaId(null);
+        }
+      } catch {
+        console.error('Invalid persona JSON');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
   const handlePreview = async () => {
     try {
       const persona = {
@@ -111,6 +158,9 @@ export function TuningLab() {
       <div className="tuning-header">
         <h1>Tuning Lab</h1>
         <div className="header-actions">
+          <button className="btn btn-secondary" onClick={handleExport}>Export</button>
+          <button className="btn btn-secondary" onClick={() => importRef.current?.click()}>Import</button>
+          <input ref={importRef} type="file" accept=".json" style={{ display: 'none' }} onChange={handleImportFile} />
           <button className="btn btn-secondary" onClick={handleReset}>Reset</button>
           <button className="btn btn-secondary" onClick={handlePreview}>Preview</button>
           <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
