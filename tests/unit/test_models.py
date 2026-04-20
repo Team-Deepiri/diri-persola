@@ -7,7 +7,6 @@ from persola.models import (
     AgentConfig,
     AgentMemoryPolicy,
     PersonaProfile,
-    PresetName,
 )
 
 

@@ -1,19 +1,27 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
+from uuid import UUID
+import re
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, List, Optional
+from typing import Dict, List, Optional
 import uuid
 import os
+from pathlib import Path
 import structlog
 
+from ..cache import TokenBucketRateLimiter
+
 limiter = Limiter(key_func=get_remote_address)
+SAFE_STATIC_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Token-bucket rate limiter for the invoke endpoint (30-token burst, 0.5 t/s refill).
 # Capacity matches the slowapi limit so both layers agree on the burst ceiling.
@@ -64,10 +72,8 @@ from ..metrics import (
 )
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
-from ..integrations.cyrex import CyrexClient, HAS_CYREX
-from ..db import get_db, init_db, close_db, PersonaRepo, AgentRepo
+from ..integrations.cyrex import CyrexClient
 from ..logging import configure_logging
-from ..cache import TokenBucketRateLimiter
 
 configure_logging()
 log = structlog.get_logger("persola.api")
@@ -330,6 +336,10 @@ async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSe
     return _to_persona_profile(created)
 
 
+class ClonePersonaRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
 @app.post("/api/v1/personas", response_model=PersonaProfile)
 async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
@@ -359,6 +369,24 @@ async def list_personas(db: AsyncSession = Depends(get_db)):
     return [_to_persona_profile(item) for item in personas]
 
 
+@app.get("/api/v1/personas/search", response_model=List[PersonaProfile])
+async def search_personas(q: str, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepository(db)
+    personas = await repo.search(q)
+    return [_to_persona_profile(item) for item in personas]
+
+
+@app.post("/api/v1/personas/import", response_model=PersonaProfile)
+async def import_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepository(db)
+    imported = persona.model_copy(deep=True)
+    imported.id = str(uuid.uuid4())
+    created = await repo.create(_to_persona_model(imported))
+    await _record_persona_version(db, created, source="import", summary="Persona imported")
+    await db.commit()
+    return _to_persona_profile(created)
+
+
 @app.get("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
 async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
@@ -366,6 +394,19 @@ async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
     return _to_persona_profile(persona)
+
+
+@app.post("/api/v1/personas/{persona_id}/clone", response_model=PersonaProfile)
+async def clone_persona(persona_id: str, request: ClonePersonaRequest, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepository(db)
+    try:
+        cloned = await repo.clone(UUID(persona_id), request.name)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    await _record_persona_version(db, cloned, source="manual", summary=f"Cloned from {persona_id}")
+    await db.commit()
+    return _to_persona_profile(cloned)
 
 
 @app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
@@ -477,16 +518,10 @@ async def export_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     persona = await repo.get(UUID(persona_id))
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    return _to_persona_profile(persona).model_dump()
-
-
-@app.post("/api/v1/personas/import", response_model=PersonaProfile)
-async def import_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
-    created = await repo.create(_to_persona_model(persona))
-    await _record_persona_version(db, created, source="import", summary="Persona imported")
-    await db.commit()
-    return _to_persona_profile(created)
+    return JSONResponse(
+        content=jsonable_encoder(_to_persona_profile(persona)),
+        headers={"Content-Disposition": f'attachment; filename="persona_{persona_id}.json"'},
+    )
 
 
 @app.get("/api/v1/presets")
@@ -892,20 +927,21 @@ async def invoke_agent(
         }
         
     except Exception as e:
+        generic_error_message = "[Persola Error] An internal error has occurred."
         await agent_run_repo.mark_completed(
             run.id,
             status="failed",
-            response_message=f"[Persola Error] {str(e)}",
+            response_message=generic_error_message,
             provider=None,
             model=agent.model,
         )
         await db.commit()
-        log.error("llm.error", provider=provider_type, agent_id=agent_id, error=str(e))
+        log.error("llm.error", provider=provider_type, agent_id=agent_id, error=str(e), exc_info=True)
         return {
             "agent_id": agent_id,
-            "response": f"[Persola Error] {str(e)}",
+            "response": generic_error_message,
             "message": body.message,
-            "error": str(e),
+            "error": "internal_error",
         }
 
 
@@ -917,8 +953,30 @@ async def get_ui(db: AsyncSession = Depends(get_db)):
 
 @app.get("/static/{path:path}")
 async def get_static(path: str, db: AsyncSession = Depends(get_db)):
-    static_path = os.path.join(os.path.dirname(__file__), "..", "ui", "static", path)
-    return FileResponse(static_path)
+    static_root = Path(os.path.dirname(__file__), "..", "ui", "static").resolve()
+    requested_path = Path(path)
+
+    if requested_path.is_absolute() or "\x00" in path:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    parts = requested_path.parts
+    if (
+        not parts
+        or any(part in ("", ".", "..") for part in parts)
+        or any(not SAFE_STATIC_SEGMENT.fullmatch(part) for part in parts)
+    ):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    static_path = static_root.joinpath(*parts).resolve(strict=False)
+    try:
+        static_path.relative_to(static_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not static_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(str(static_path))
 
 
 def main():

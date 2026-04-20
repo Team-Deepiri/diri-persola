@@ -145,7 +145,7 @@ class TestApplyPreset:
         assert result.formality >= 0.7
 
     def test_all_presets_produce_valid_knobs(self, engine):
-        for preset in PresetName:
+        for preset in list(PresetName):
             result = engine.apply_preset(preset)
             validation = engine.validate_knobs(result.get_knobs())
             assert validation["valid"], (

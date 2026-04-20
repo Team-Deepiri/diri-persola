@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import PersonaModel
@@ -24,7 +24,15 @@ class PersonaRepository(BaseRepository[PersonaModel]):
         return list(result.scalars().all())
 
     async def search(self, query_text: str) -> list[PersonaModel]:
-        query = select(PersonaModel).where(PersonaModel.name.ilike(f"%{query_text}%"))
+        term = query_text.strip()
+        if not term:
+            return []
+        query = select(PersonaModel).where(
+            or_(
+                PersonaModel.name.ilike(f"%{term}%"),
+                PersonaModel.description.ilike(f"%{term}%"),
+            )
+        )
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
@@ -40,7 +48,8 @@ class PersonaRepository(BaseRepository[PersonaModel]):
     async def seed_presets(self, presets: dict) -> None:
         for preset_name, preset_data in presets.items():
             name = hasattr(preset_name, "value") and preset_name.value or str(preset_name)
+            preset_id = f"preset_{name}"
             existing = await self.get_by_name(name)
             if existing is None:
-                profile = preset_data.model_copy(update={"name": name})
+                profile = preset_data.model_copy(update={"id": preset_id, "name": name})
                 await self.create(PersonaModel.from_profile(profile, is_preset=True))

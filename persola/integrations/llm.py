@@ -2,7 +2,7 @@
 LLM Integration for Persola
 Uses Ollama by default, falls back to OpenAI/Anthropic if API keys are provided
 """
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator
 import os
 import structlog
 import httpx
@@ -33,7 +33,7 @@ class OllamaClient:
             import requests
             resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
             return resp.status_code == 200
-        except:
+        except (ImportError, requests.RequestException):
             return False
     
     async def generate(self, prompt: str) -> str:
@@ -75,8 +75,8 @@ class OllamaClient:
                                 j = json.loads(data)
                                 if "response" in j:
                                     yield j["response"]
-                        except:
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            log.debug("Skipping non-JSON or malformed streaming chunk", error=str(exc), chunk=line)
 
 
 class OpenAIClientWrapper:
