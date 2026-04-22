@@ -2,12 +2,12 @@
 LLM Integration for Persola
 Uses Ollama by default, falls back to OpenAI/Anthropic if API keys are provided
 """
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import Optional, Dict, Any, AsyncGenerator
 import os
-import logging
+import structlog
 import httpx
 
-logger = logging.getLogger("persola.llm")
+log = structlog.get_logger("persola.llm")
 
 
 class OllamaClient:
@@ -33,7 +33,7 @@ class OllamaClient:
             import requests
             resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
             return resp.status_code == 200
-        except:
+        except (ImportError, requests.RequestException):
             return False
     
     async def generate(self, prompt: str) -> str:
@@ -75,8 +75,8 @@ class OllamaClient:
                                 j = json.loads(data)
                                 if "response" in j:
                                     yield j["response"]
-                        except:
-                            pass
+                        except (ValueError, TypeError) as exc:
+                            log.debug("Skipping non-JSON or malformed streaming chunk", error=str(exc), chunk=line)
 
 
 class OpenAIClientWrapper:
@@ -190,7 +190,7 @@ class PersolaLLM:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
-            logger.info(f"Initialized OpenAI provider with model {self.model}")
+            log.info("llm.init", provider="openai", model=self.model)
             
         elif provider == "anthropic":
             self._provider = AnthropicClientWrapper(
@@ -198,7 +198,7 @@ class PersolaLLM:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
-            logger.info(f"Initialized Anthropic provider with model {self.model}")
+            log.info("llm.init", provider="anthropic", model=self.model)
             
         elif provider == "ollama":
             self._provider = OllamaClient(
@@ -206,7 +206,7 @@ class PersolaLLM:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
             )
-            logger.info(f"Initialized Ollama provider with model {self.model}")
+            log.info("llm.init", provider="ollama", model=self.model)
     
     def get_provider_type(self) -> str:
         return self._provider_type or "unknown"
@@ -257,7 +257,7 @@ def get_llm_provider(
     )
 
 
-HAS_CYREX = False  # Kept for compatibility
+HAS_CYREX = bool(os.getenv("CYREX_URL") and os.getenv("CYREX_API_KEY"))
 
 __all__ = [
     "PersolaLLM",

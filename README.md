@@ -11,7 +11,7 @@ Agentic Personality Framework - Create AI agents with customizable personalities
 - **Persona Blending** - Combine personas
 - **Real-time Playground** - Test and iterate
 
-The goal of this framework is to create agents who don’t just execute instructions—they reason, reflect, and act as if they have morals that are going to be completely CHOSEN by them.
+The goal of this framework is to create agents who don’t just execute instructions—they reason, reflect, and act as if they have morals that are going to be completely CHOSEN by them. AI that feels. We can study and map emotional context to numerical values, similiar to my aamati project.
 
 This should be working right alongside Cyrex, which is the agentic runtime engine, but also cna work standalone. 
 

@@ -1,0 +1,115 @@
+.message-input-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+/* ── Toolbar row (session selector) ── */
+.message-input-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.message-input-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── Input + send row ── */
+.message-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 10px 14px 12px;
+  transition: opacity 0.2s;
+}
+
+.message-input-row.is-disabled {
+  opacity: 0.55;
+}
+
+.message-textarea {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 22px;
+  padding: 10px 14px;
+  resize: none;
+  outline: none;
+  transition: border-color 0.2s;
+  overflow-y: auto;
+  /* height is set inline via JS auto-grow */
+}
+
+.message-textarea:focus {
+  border-color: var(--accent);
+}
+
+.message-textarea:disabled {
+  cursor: not-allowed;
+}
+
+.message-textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* ── Send button ── */
+.message-send-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  border: none;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.2s, transform 0.1s;
+}
+
+.message-send-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.message-send-btn:active:not(:disabled) {
+  transform: scale(0.93);
+}
+
+.message-send-btn:disabled {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.message-send-btn.is-sending {
+  background: var(--bg-tertiary);
+  cursor: not-allowed;
+}
+
+/* Spinner inside send button */
+.send-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2.5px solid var(--text-muted);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

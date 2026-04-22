@@ -1,0 +1,63 @@
+services:
+  persola-db:
+    image: postgres:16-alpine
+    container_name: persola-db
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-deepiri}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deepiripassword}
+      POSTGRES_DB: ${POSTGRES_DB:-persola}
+    volumes:
+      - persola_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deepiri}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+   persola:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: persola
+    restart: unless-stopped
+    ports:
+      - "8010:8002"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8002"
+      DEBUG: "true"
+      CORS_ORIGIN: "*"
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-deepiri}:${POSTGRES_PASSWORD:-deepiripassword}@persola-db:5432/${POSTGRES_DB:-persola}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ./persola:/app/persola
+      - ./alembic:/app/alembic
+    command: sh -c "alembic upgrade head && uvicorn persola.api.main:app --host 0.0.0.0 --port 8002 --reload"
+    depends_on:
+      persola-db:
+        condition: service_healthy
+
+  persola-ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    container_name: persola-ui
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - persola
+
+volumes:
+  persola_db_data:
+
+networks:
+  default:
+    name: deepiri-dev-network
+    external: true
