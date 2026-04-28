@@ -78,6 +78,28 @@ class OllamaClient:
                         except (ValueError, TypeError) as exc:
                             log.debug("Skipping non-JSON or malformed streaming chunk", error=str(exc), chunk=line)
 
+    async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+        """Send a conversation using the Ollama /api/chat endpoint."""
+        formatted: list[dict] = []
+        if system_prompt:
+            formatted.append({"role": "system", "content": system_prompt})
+        formatted.extend(messages)
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": self.model,
+                    "messages": formatted,
+                    "options": {
+                        "temperature": self.temperature,
+                        "num_predict": self.max_tokens,
+                    },
+                    "stream": False,
+                },
+            )
+            response.raise_for_status()
+            return response.json().get("message", {}).get("content", "")
+
 
 class OpenAIClientWrapper:
     """Wrapper around OpenAI SDK"""
@@ -107,6 +129,21 @@ class OpenAIClientWrapper:
         response = client.chat.completions.create(
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        return response.choices[0].message.content
+
+    async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+        """Send a conversation using the OpenAI chat completions API."""
+        formatted: list[dict] = []
+        if system_prompt:
+            formatted.append({"role": "system", "content": system_prompt})
+        formatted.extend(messages)
+        client = self._get_client()
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=formatted,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
@@ -143,6 +180,21 @@ class AnthropicClientWrapper:
             max_tokens=self.max_tokens,
             temperature=self.temperature,
             messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+
+    async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+        """Send a conversation using the Anthropic messages API."""
+        client = self._get_client()
+        kwargs: dict = {}
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        response = client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            messages=messages,
+            **kwargs,
         )
         return response.content[0].text
 
@@ -231,7 +283,23 @@ class PersolaLLM:
         else:
             result = await self.generate(prompt)
             yield result
-    
+
+    async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+        """Send a conversation using the native chat format of the underlying provider."""
+        if self._provider is None:
+            raise RuntimeError("No provider initialized")
+        if hasattr(self._provider, "chat"):
+            return await self._provider.chat(messages, system_prompt=system_prompt)
+        # Fallback: format messages as a single prompt for providers without a chat method
+        parts: list[str] = []
+        if system_prompt:
+            parts.append(f"System: {system_prompt}\n")
+        for msg in messages:
+            role = msg.get("role", "user").capitalize()
+            parts.append(f"{role}: {msg.get('content', '')}")
+        parts.append("Assistant:")
+        return await self._provider.generate("\n".join(parts))
+
     def get_config(self) -> Dict[str, Any]:
         return {
             "provider": self._provider_type,

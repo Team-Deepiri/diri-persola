@@ -50,7 +50,7 @@ from ..models import (
     PresetName,
 )
 from ..db.database import check_db_health, close_db, get_db, init_db
-from ..db.models import AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel
+from ..db.models import AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel, SessionModel
 from ..db.repositories import (
     AgentRepository,
     AgentRunRepository,
@@ -693,6 +693,76 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
     ]
 
 
+class SessionCreateRequest(BaseModel):
+    agent_id: str
+    session_id: Optional[str] = None
+    metadata: Dict[str, str] = Field(default_factory=dict)
+
+
+class MessageAppendRequest(BaseModel):
+    role: str = Field(pattern="^(user|assistant|system)$")
+    content: str = Field(min_length=1, max_length=32_768)
+
+
+@app.post("/api/v1/sessions", status_code=201)
+async def create_session(body: SessionCreateRequest, db: AsyncSession = Depends(get_db)):
+    agent_repo = AgentRepository(db)
+    agent = await agent_repo.get(UUID(body.agent_id))
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    sid = body.session_id or str(uuid.uuid4())
+    session_repo = SessionRepository(db)
+
+    existing = await session_repo.get_by_session_id(sid)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Session ID already exists")
+
+    session = await session_repo.create(
+        SessionModel(agent_id=agent.id, session_id=sid, session_metadata=body.metadata)
+    )
+    await db.commit()
+    return {
+        "id": str(session.id),
+        "agent_id": str(session.agent_id),
+        "session_id": session.session_id,
+        "metadata": session.session_metadata,
+        "message_count": session.message_count,
+        "created_at": session.created_at,
+    }
+
+
+@app.post("/api/v1/sessions/{session_id}/messages", status_code=201)
+async def append_message(session_id: str, body: MessageAppendRequest, db: AsyncSession = Depends(get_db)):
+    session_repo = SessionRepository(db)
+    message_repo = MessageRepository(db)
+
+    session = await session_repo.get_by_session_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    message = await message_repo.add(session.id, body.role, body.content)
+    await session_repo.increment_message_count(session.id)
+    await db.commit()
+    return {
+        "id": str(message.id),
+        "session_id": str(message.session_id),
+        "role": message.role,
+        "content": message.content,
+        "created_at": message.created_at,
+    }
+
+
+@app.delete("/api/v1/sessions/{session_id}", status_code=204)
+async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    session_repo = SessionRepository(db)
+    session = await session_repo.get_by_session_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await session_repo.delete(session.id)
+    await db.commit()
+
+
 class InvokeRequest(BaseModel):
     message: str = Field(min_length=1, max_length=32_768)
     session_id: Optional[str] = None
@@ -825,6 +895,8 @@ async def invoke_agent(
 
     runtime_session_id = body.session_id or f"{agent_id}-default"
     session = await session_repo.get_or_create(agent.id, runtime_session_id)
+    # Load history before adding the current turn to avoid duplicating the new message
+    past_messages = await message_repo.get_history(session.id, limit=20)
     await message_repo.add(session.id, "user", body.message)
     run = await agent_run_repo.create(
         AgentRunModel(
@@ -837,22 +909,6 @@ async def invoke_agent(
         )
     )
 
-    if not HAS_CYREX:
-        await agent_run_repo.mark_completed(
-            run.id,
-            status="unavailable",
-            response_message="[Persola] Cyrex not available. Install dependencies to enable LLM inference.",
-            provider="none",
-            model=agent.model,
-        )
-        await db.commit()
-        return {
-            "agent_id": agent_id,
-            "response": "[Persola] Cyrex not available. Install dependencies to enable LLM inference.",
-            "message": body.message,
-            "provider": "none",
-        }
-    
     try:
         provider_type = "auto"
         if os.getenv("OPENAI_API_KEY"):
@@ -887,10 +943,12 @@ async def invoke_agent(
         system_prompt = agent.system_prompt or (
             engine.build_system_prompt(_to_persona_profile(profile)) if profile else ""
         )
-        
-        full_prompt = f"{system_prompt}\n\nUser: {body.message}\n\nAssistant:" if system_prompt else body.message
-        
-        response = await llm.generate(full_prompt)
+
+        # Build messages list from conversation history + current turn
+        messages = [{"role": m.role, "content": m.content} for m in past_messages]
+        messages.append({"role": "user", "content": body.message})
+
+        response = await llm.chat(messages, system_prompt=system_prompt)
 
         await message_repo.add(
             session.id,
