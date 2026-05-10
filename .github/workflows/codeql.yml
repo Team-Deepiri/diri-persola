@@ -42,6 +42,11 @@ jobs:
       run: |
         curl -sSL https://install.python-poetry.org | python3 -
 
+    - name: Update Poetry lock
+      if: matrix.language == 'python'
+      run: |
+        poetry lock
+
     - name: Install Python dependencies
       if: matrix.language == 'python'
       run: |
