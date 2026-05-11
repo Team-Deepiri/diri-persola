@@ -1,0 +1,81 @@
+name: "CodeQL"
+
+on:
+  push:
+    branches: [ "main", "sandeep-dev" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Mondays
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python', 'javascript' ]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: ${{ matrix.language }}
+
+    - name: Setup Python
+      if: matrix.language == 'python'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Poetry
+      if: matrix.language == 'python'
+      run: |
+        curl -sSL https://install.python-poetry.org | python3 -
+
+    - name: Update Poetry lock
+      if: matrix.language == 'python'
+      run: |
+        poetry lock
+
+    - name: Install Python dependencies
+      if: matrix.language == 'python'
+      run: |
+        poetry install
+
+    - name: Setup Node.js
+      if: matrix.language == 'javascript'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: ui/package-lock.json
+
+    - name: Install UI dependencies
+      if: matrix.language == 'javascript'
+      run: |
+        cd ui
+        npm ci
+
+    - name: Build UI
+      if: matrix.language == 'javascript'
+      run: |
+        cd ui
+        npm run build
+
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v3
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: "/language:${{matrix.language}}"
