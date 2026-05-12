@@ -2,6 +2,7 @@
 LLM Integration for Persola
 Uses Ollama by default, falls back to OpenAI/Anthropic if API keys are provided
 """
+from deepiri_ollama.runtime import check
 from typing import Optional, Dict, Any, AsyncGenerator
 import os
 import structlog
@@ -30,10 +31,9 @@ class OllamaClient:
     def is_available(self) -> bool:
         """Check if Ollama is available"""
         try:
-            import requests
-            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
-            return resp.status_code == 200
-        except (ImportError, requests.RequestException):
+            status = check(base_url=self.base_url)
+            return bool(status["ok"])
+        except Exception:
             return False
     
     async def generate(self, prompt: str) -> str:
