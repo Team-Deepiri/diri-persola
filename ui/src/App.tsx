@@ -16,7 +16,6 @@ const navCls = ({ isActive }: { isActive: boolean }) =>
   `nav-item${isActive ? ' active' : ''}`;
 
 function App() {
-
   return (
     <div className="app">
       <aside className="sidebar">
