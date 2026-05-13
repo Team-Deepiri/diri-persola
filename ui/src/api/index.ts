@@ -1,8 +1,8 @@
 import axios from 'axios';
-import type { 
-  PersonaProfile, 
-  AgentConfig, 
-  KnobsResponse, 
+import type {
+  PersonaProfile,
+  AgentConfig,
+  KnobsResponse,
   PresetsResponse,
   BlendRequest,
   InvokeRequest,
