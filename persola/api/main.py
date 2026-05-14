@@ -1,14 +1,45 @@
 from contextlib import asynccontextmanager
+from datetime import datetime
+from uuid import UUID
+import re
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, List, Optional
+from typing import Dict, List, Optional
 import uuid
 import os
-import logging
+from pathlib import Path
+import structlog
+
+from ..cache import TokenBucketRateLimiter
+
+limiter = Limiter(key_func=get_remote_address)
+SAFE_STATIC_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Token-bucket rate limiter for the invoke endpoint (30-token burst, 0.5 t/s refill).
+# Capacity matches the slowapi limit so both layers agree on the burst ceiling.
+_invoke_bucket = TokenBucketRateLimiter(capacity=30, refill_rate=0.5)
+
+
+async def _invoke_rate_limit(request: Request) -> None:
+    """FastAPI dependency that enforces the token-bucket limit on invoke."""
+    identifier = get_remote_address(request)
+    allowed, remaining = await _invoke_bucket.consume(identifier)
+    if not allowed:
+        # Seconds until one token is available again
+        retry_after = max(1, round(1.0 / _invoke_bucket.refill_rate))
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded",
+            headers={"Retry-After": str(retry_after), "X-RateLimit-Remaining": "0"},
+        )
 
 from ..analysis import StyleToKnobMapper, WritingStyleExtractor
 from ..models import (
@@ -19,7 +50,7 @@ from ..models import (
     PresetName,
 )
 from ..db.database import check_db_health, close_db, get_db, init_db
-from ..db.models import AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel
+from ..db.models import AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel, SessionModel
 from ..db.repositories import (
     AgentRepository,
     AgentRunRepository,
@@ -31,21 +62,29 @@ from ..db.repositories import (
     SessionRepository,
 )
 from ..db.services import PersonaService
+from ..auth import APIKeyAuth
+from ..metrics import (
+    MetricsMiddleware,
+    metrics_endpoint,
+    record_llm_tokens,
+    set_agents_total,
+    set_personas_total,
+)
 from ..engine import PersonaEngine
 from ..integrations.llm import get_llm_provider, HAS_CYREX
-from ..integrations.cyrex import CyrexClient, HAS_CYREX
-from ..db import get_db, init_db, close_db, PersonaRepo, AgentRepo
+from ..integrations.cyrex import CyrexClient
+from ..logging import configure_logging
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("persola.api")
+configure_logging()
+log = structlog.get_logger("persola.api")
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Startup: init DB, seed presets. Shutdown: dispose connection pool."""
     
-    logger.info("Initializing database...")
+    log.info("db.init")
     await init_db()
-    logger.info("Database ready.")
+    log.info("db.ready")
 
     # Seed presets once at startup (idempotent)
     async for db in get_db():
@@ -56,7 +95,7 @@ async def lifespan(application: FastAPI):
 
     yield
 
-    logger.info("Shutting down database...")
+    log.info("db.shutdown")
     await close_db()
 
 app = FastAPI(
@@ -66,6 +105,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(APIKeyAuth)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -162,6 +205,9 @@ async def root(db: AsyncSession = Depends(get_db)):
     return {"message": "Persola API", "version": "0.1.0"}
 
 
+app.add_route("/metrics", metrics_endpoint, methods=["GET"])
+
+
 @app.get("/health")
 async def health(db: AsyncSession = Depends(get_db)):
     db_ok = await check_db_health()
@@ -211,14 +257,14 @@ async def validate_knobs(knobs: Dict[str, float], db: AsyncSession = Depends(get
 
 
 class AnalysisExtractRequest(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=50_000)
     create_persona: bool = False
-    persona_name: str | None = None
+    persona_name: str | None = Field(default=None, max_length=200)
 
 
 class AnalysisCreateRequest(BaseModel):
-    text: str = Field(min_length=1)
-    name: str = Field(min_length=1, max_length=255)
+    text: str = Field(min_length=1, max_length=50_000)
+    name: str = Field(min_length=1, max_length=200)
 
 
 class AnalysisExtractResponse(BaseModel):
@@ -238,13 +284,14 @@ async def _run_style_analysis(text: str) -> tuple[dict[str, float], float, str]:
 
 
 @app.post("/api/v1/analysis/extract", response_model=AnalysisExtractResponse)
-async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
-    knobs, confidence, notes = await _run_style_analysis(request.text)
+@limiter.limit("10/minute")
+async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
+    knobs, confidence, notes = await _run_style_analysis(body.text)
     persona_id: str | None = None
     persona_uuid: UUID | None = None
 
-    if request.create_persona:
-        persona_name = request.persona_name or "Writing Style Persona"
+    if body.create_persona:
+        persona_name = body.persona_name or "Writing Style Persona"
         repo = PersonaRepository(db)
         persona = _build_persona_from_knobs(persona_name, knobs, notes)
         created = await repo.create(_to_persona_model(persona))
@@ -254,7 +301,7 @@ async def extract_analysis(request: AnalysisExtractRequest, db: AsyncSession = D
 
     await _record_analysis_run(
         db,
-        text=request.text,
+        text=body.text,
         knobs=knobs,
         confidence=confidence,
         notes=notes,
@@ -289,6 +336,10 @@ async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSe
     return _to_persona_profile(created)
 
 
+class ClonePersonaRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
 @app.post("/api/v1/personas", response_model=PersonaProfile)
 async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
@@ -305,6 +356,9 @@ async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get
     )
 
     await db.commit()
+    log.info("persona.created", persona_id=str(created.id), name=created.name)
+    personas = await PersonaRepository(db).count()
+    set_personas_total(personas)
     return _to_persona_profile(created)
 
 
@@ -315,6 +369,24 @@ async def list_personas(db: AsyncSession = Depends(get_db)):
     return [_to_persona_profile(item) for item in personas]
 
 
+@app.get("/api/v1/personas/search", response_model=List[PersonaProfile])
+async def search_personas(q: str, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepository(db)
+    personas = await repo.search(q)
+    return [_to_persona_profile(item) for item in personas]
+
+
+@app.post("/api/v1/personas/import", response_model=PersonaProfile)
+async def import_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepository(db)
+    imported = persona.model_copy(deep=True)
+    imported.id = str(uuid.uuid4())
+    created = await repo.create(_to_persona_model(imported))
+    await _record_persona_version(db, created, source="import", summary="Persona imported")
+    await db.commit()
+    return _to_persona_profile(created)
+
+
 @app.get("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
 async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
@@ -322,6 +394,19 @@ async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
     return _to_persona_profile(persona)
+
+
+@app.post("/api/v1/personas/{persona_id}/clone", response_model=PersonaProfile)
+async def clone_persona(persona_id: str, request: ClonePersonaRequest, db: AsyncSession = Depends(get_db)):
+    repo = PersonaRepository(db)
+    try:
+        cloned = await repo.clone(UUID(persona_id), request.name)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Persona not found")
+
+    await _record_persona_version(db, cloned, source="manual", summary=f"Cloned from {persona_id}")
+    await db.commit()
+    return _to_persona_profile(cloned)
 
 
 @app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
@@ -376,6 +461,8 @@ async def delete_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     if not deleted:
         raise HTTPException(status_code=404, detail="Persona not found")
     await db.commit()
+    count = await repo.count()
+    set_personas_total(count)
     return {"deleted": True}
 
 
@@ -431,16 +518,10 @@ async def export_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
     persona = await repo.get(UUID(persona_id))
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    return _to_persona_profile(persona).model_dump()
-
-
-@app.post("/api/v1/personas/import", response_model=PersonaProfile)
-async def import_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
-    created = await repo.create(_to_persona_model(persona))
-    await _record_persona_version(db, created, source="import", summary="Persona imported")
-    await db.commit()
-    return _to_persona_profile(created)
+    return JSONResponse(
+        content=jsonable_encoder(_to_persona_profile(persona)),
+        headers={"Content-Disposition": f'attachment; filename="persona_{persona_id}.json"'},
+    )
 
 
 @app.get("/api/v1/presets")
@@ -506,6 +587,8 @@ async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
     await db.commit()
 
     # Return API-friendly config
+    agents = await agent_repo.count()
+    set_agents_total(agents)
     return _to_agent_config(created)  
 
 
@@ -563,6 +646,8 @@ async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent not found")
     await db.commit()
+    count = await repo.count()
+    set_agents_total(count)
 
 
 @app.get("/api/v1/agents/{agent_id}/sessions")
@@ -608,8 +693,78 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
     ]
 
 
+class SessionCreateRequest(BaseModel):
+    agent_id: str
+    session_id: Optional[str] = None
+    metadata: Dict[str, str] = Field(default_factory=dict)
+
+
+class MessageAppendRequest(BaseModel):
+    role: str = Field(pattern="^(user|assistant|system)$")
+    content: str = Field(min_length=1, max_length=32_768)
+
+
+@app.post("/api/v1/sessions", status_code=201)
+async def create_session(body: SessionCreateRequest, db: AsyncSession = Depends(get_db)):
+    agent_repo = AgentRepository(db)
+    agent = await agent_repo.get(UUID(body.agent_id))
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    sid = body.session_id or str(uuid.uuid4())
+    session_repo = SessionRepository(db)
+
+    existing = await session_repo.get_by_session_id(sid)
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Session ID already exists")
+
+    session = await session_repo.create(
+        SessionModel(agent_id=agent.id, session_id=sid, session_metadata=body.metadata)
+    )
+    await db.commit()
+    return {
+        "id": str(session.id),
+        "agent_id": str(session.agent_id),
+        "session_id": session.session_id,
+        "metadata": session.session_metadata,
+        "message_count": session.message_count,
+        "created_at": session.created_at,
+    }
+
+
+@app.post("/api/v1/sessions/{session_id}/messages", status_code=201)
+async def append_message(session_id: str, body: MessageAppendRequest, db: AsyncSession = Depends(get_db)):
+    session_repo = SessionRepository(db)
+    message_repo = MessageRepository(db)
+
+    session = await session_repo.get_by_session_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    message = await message_repo.add(session.id, body.role, body.content)
+    await session_repo.increment_message_count(session.id)
+    await db.commit()
+    return {
+        "id": str(message.id),
+        "session_id": str(message.session_id),
+        "role": message.role,
+        "content": message.content,
+        "created_at": message.created_at,
+    }
+
+
+@app.delete("/api/v1/sessions/{session_id}", status_code=204)
+async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    session_repo = SessionRepository(db)
+    session = await session_repo.get_by_session_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await session_repo.delete(session.id)
+    await db.commit()
+
+
 class InvokeRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=32_768)
     session_id: Optional[str] = None
     history: Optional[List[Dict[str, str]]] = None
 
@@ -678,7 +833,7 @@ async def list_cyrex_agents(db: AsyncSession = Depends(get_db)):
     try:
         return {"agents": await cyrex_client.list_cyrex_agents()}
     except Exception as e:
-        logger.error(f"Cyrex list agents error: {e}")
+        log.error("cyrex.list_agents.error", error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex request failed: {str(e)}") from e
 
 
@@ -699,7 +854,7 @@ async def sync_persona_to_cyrex(persona_id: str, db: AsyncSession = Depends(get_
             "cyrex_response": payload,
         }
     except Exception as e:
-        logger.error(f"Cyrex sync error: {e}")
+        log.error("cyrex.sync.error", persona_id=persona_id, error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex sync failed: {str(e)}") from e
 
 
@@ -715,12 +870,19 @@ async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(ge
         await db.commit()
         return _to_persona_profile(created)
     except Exception as e:
-        logger.error(f"Cyrex import error: {e}")
+        log.error("cyrex.import.error", cyrex_id=cyrex_id, error=str(e))
         raise HTTPException(status_code=502, detail=f"Cyrex import failed: {str(e)}") from e
 
 
 @app.post("/api/v1/agents/{agent_id}/invoke")
-async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def invoke_agent(
+    request: Request,
+    agent_id: str,
+    body: InvokeRequest,
+    db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_invoke_rate_limit),
+):
     agent_repo = AgentRepository(db)
     agent_run_repo = AgentRunRepository(db)
     persona_repo = PersonaRepository(db)
@@ -731,36 +893,22 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    runtime_session_id = request.session_id or f"{agent_id}-default"
+    runtime_session_id = body.session_id or f"{agent_id}-default"
     session = await session_repo.get_or_create(agent.id, runtime_session_id)
-    await message_repo.add(session.id, "user", request.message)
+    # Load history before adding the current turn to avoid duplicating the new message
+    past_messages = await message_repo.get_history(session.id, limit=20)
+    await message_repo.add(session.id, "user", body.message)
     run = await agent_run_repo.create(
         AgentRunModel(
             agent_id=agent.id,
             session_id=session.id,
             status="running",
-            request_message=request.message,
+            request_message=body.message,
             model=agent.model,
             run_metadata={"requested_at": datetime.utcnow().isoformat()},
         )
     )
 
-    if not HAS_CYREX:
-        await agent_run_repo.mark_completed(
-            run.id,
-            status="unavailable",
-            response_message="[Persola] Cyrex not available. Install dependencies to enable LLM inference.",
-            provider="none",
-            model=agent.model,
-        )
-        await db.commit()
-        return {
-            "agent_id": agent_id,
-            "response": "[Persola] Cyrex not available. Install dependencies to enable LLM inference.",
-            "message": request.message,
-            "provider": "none",
-        }
-    
     try:
         provider_type = "auto"
         if os.getenv("OPENAI_API_KEY"):
@@ -787,7 +935,7 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             return {
                 "agent_id": agent_id,
                 "response": "[Persola] No LLM provider available. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or ensure Ollama is running.",
-                "message": request.message,
+                "message": body.message,
                 "provider": provider_type,
             }
 
@@ -795,10 +943,12 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
         system_prompt = agent.system_prompt or (
             engine.build_system_prompt(_to_persona_profile(profile)) if profile else ""
         )
-        
-        full_prompt = f"{system_prompt}\n\nUser: {request.message}\n\nAssistant:" if system_prompt else request.message
-        
-        response = await llm.generate(full_prompt)
+
+        # Build messages list from conversation history + current turn
+        messages = [{"role": m.role, "content": m.content} for m in past_messages]
+        messages.append({"role": "user", "content": body.message})
+
+        response = await llm.chat(messages, system_prompt=system_prompt)
 
         await message_repo.add(
             session.id,
@@ -815,29 +965,41 @@ async def invoke_agent(agent_id: str, request: InvokeRequest, db: AsyncSession =
             model=agent.model,
         )
         await db.commit()
-        
+        log.info(
+            "agent.invoked",
+            agent_id=agent_id,
+            session_id=runtime_session_id,
+            provider=llm.get_provider_type(),
+            tokens=run.tokens_used,
+        )
+        record_llm_tokens(
+            provider=llm.get_provider_type(),
+            model=agent.model or "unknown",
+            tokens=run.tokens_used or 0,
+        )
         return {
             "agent_id": agent_id,
             "response": response,
-            "message": request.message,
+            "message": body.message,
             "provider": llm.get_provider_type(),
         }
         
     except Exception as e:
+        generic_error_message = "[Persola Error] An internal error has occurred."
         await agent_run_repo.mark_completed(
             run.id,
             status="failed",
-            response_message=f"[Persola Error] {str(e)}",
+            response_message=generic_error_message,
             provider=None,
             model=agent.model,
         )
         await db.commit()
-        logger.error(f"LLM invocation error: {e}")
+        log.error("llm.error", provider=provider_type, agent_id=agent_id, error=str(e), exc_info=True)
         return {
             "agent_id": agent_id,
-            "response": f"[Persola Error] {str(e)}",
-            "message": request.message,
-            "error": str(e),
+            "response": generic_error_message,
+            "message": body.message,
+            "error": "internal_error",
         }
 
 
@@ -849,8 +1011,30 @@ async def get_ui(db: AsyncSession = Depends(get_db)):
 
 @app.get("/static/{path:path}")
 async def get_static(path: str, db: AsyncSession = Depends(get_db)):
-    static_path = os.path.join(os.path.dirname(__file__), "..", "ui", "static", path)
-    return FileResponse(static_path)
+    static_root = Path(os.path.dirname(__file__), "..", "ui", "static").resolve()
+    requested_path = Path(path)
+
+    if requested_path.is_absolute() or "\x00" in path:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    parts = requested_path.parts
+    if (
+        not parts
+        or any(part in ("", ".", "..") for part in parts)
+        or any(not SAFE_STATIC_SEGMENT.fullmatch(part) for part in parts)
+    ):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    static_path = static_root.joinpath(*parts).resolve(strict=False)
+    try:
+        static_path.relative_to(static_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not static_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(str(static_path))
 
 
 def main():

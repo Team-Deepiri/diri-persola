@@ -1,0 +1,17 @@
+name: diri-persola-codeql-config
+
+# Focus analysis on maintained Python runtime code and DB migrations.
+paths:
+  - persola
+  - alembic
+
+# Exclude generated/build/cache/runtime artifacts.
+paths-ignore:
+  - '**/__pycache__/**'
+  - '**/.pytest_cache/**'
+  - '**/.mypy_cache/**'
+  - '**/.venv/**'
+  - '**/venv/**'
+  - '**/dist/**'
+  - '**/build/**'
+  - '**/*.min.js'

@@ -6,7 +6,7 @@ from typing import Any
 
 import click
 
-from ..client import APIClient, CLIError
+from ..client import APIClient
 from ..output import print_json, print_personas_table, print_single_resource
 
 

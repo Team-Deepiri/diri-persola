@@ -9,7 +9,13 @@ function newSessionId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return `session-${crypto.randomUUID()}`;
   }
-  return `session-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    return `session-${hex}`;
+  }
+  return `session-${Date.now()}`;
 }
 
 interface OptimisticMessage extends Omit<Message, 'id'> {

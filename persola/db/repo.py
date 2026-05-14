@@ -7,8 +7,9 @@ and PersonaRow (SQLAlchemy, stored in Postgres).
 
 from typing import Optional
 from datetime import datetime, timezone
+import uuid
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import PersonaProfile, AgentConfig
@@ -90,6 +91,55 @@ class PersonaRepo:
     async def exists(self, persona_id: str) -> bool:
         row = await self.session.get(PersonaRow, persona_id)
         return row is not None
+
+    async def search(self, query: str) -> list[PersonaProfile]:
+        """Search personas by name or description (case-insensitive ILIKE)."""
+        term = query.strip()
+        if not term:
+            return []
+
+        pattern = f"%{term}%"
+        result = await self.session.execute(
+            select(PersonaRow)
+            .where(PersonaRow.is_active == True)
+            .where(
+                or_(
+                    PersonaRow.name.ilike(pattern),
+                    PersonaRow.description.ilike(pattern),
+                )
+            )
+            .order_by(PersonaRow.created_at)
+        )
+        return [_row_to_profile(row) for row in result.scalars().all()]
+
+    async def clone(self, persona_id: str, new_name: str) -> Optional[PersonaProfile]:
+        """Duplicate an existing persona with a new ID and name."""
+        existing_row = await self.session.get(PersonaRow, persona_id)
+        if existing_row is None:
+            return None
+
+        cloned = _row_to_profile(existing_row).model_copy(deep=True)
+        cloned.id = f"persona_{uuid.uuid4().hex[:8]}"
+        cloned.name = new_name
+        return await self.create(cloned)
+
+    async def seed_presets(self, presets: dict) -> int:
+        """Idempotently insert presets if they are missing."""
+        seeded = 0
+
+        for key, preset_profile in presets.items():
+            preset_key = key.value if hasattr(key, "value") else str(key)
+            preset_id = f"preset_{preset_key}"
+
+            if await self.session.get(PersonaRow, preset_id) is not None:
+                continue
+
+            profile = preset_profile.model_copy(deep=True)
+            profile.id = preset_id
+            await self.create(profile)
+            seeded += 1
+
+        return seeded
 
 
 # ── Agent helpers ────────────────────────────────────────────────────────────
