@@ -1,3 +1,12 @@
+name: diri-persola-dev
+
+x-logging: &minimal-logging
+  driver: "local"
+  options:
+    max-size: "1m"
+    max-file: "1"
+    compress: "false"
+
 services:
   persola-db:
     image: postgres:16-alpine
@@ -17,47 +26,78 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    networks:
+      - diri-persola-dev-network
 
   persola:
     build:
-      context: .
+      context: ./diri-persola
       dockerfile: docker/Dockerfile
-    container_name: persola
+    image: diri-persola-dev-api:latest
+    pull_policy: never
+    container_name: diri-persola-api-dev
     restart: unless-stopped
-    ports:
-      - "8010:8002"
+    logging: *minimal-logging
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      HOST: "0.0.0.0"
-      PORT: "8002"
+      HOST: 0.0.0.0
+      PORT: 8002
       DEBUG: "true"
       CORS_ORIGIN: "*"
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-deepiri}:${POSTGRES_PASSWORD:-deepiripassword}@persola-db:5432/${POSTGRES_DB:-persola}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      POSTGRES_HOST: ${PERSOLA_POSTGRES_HOST:-host.docker.internal}
+      POSTGRES_PORT: ${PERSOLA_POSTGRES_PORT:-5434}
+      POSTGRES_DB: ${POSTGRES_CYREX_DB:-cyrex_db}
+      POSTGRES_USER: ${POSTGRES_CYREX_USER:-deepiri_cyrex}
+      POSTGRES_PASSWORD: ${POSTGRES_CYREX_PASSWORD:-deepiripassword}
+      REDIS_HOST: ${PERSOLA_REDIS_HOST:-host.docker.internal}
+      REDIS_PORT: ${PERSOLA_REDIS_PORT:-6380}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispassword}
+      OLLAMA_BASE_URL: ${PERSOLA_OLLAMA_BASE_URL:-http://host.docker.internal:11435}
+      DEFAULT_MODEL: llama3:8b
+      DEFAULT_PROVIDER: ollama
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+    ports:
+      - "8010:8002"
     volumes:
-      - ./persola:/app/persola
-      - ./alembic:/app/alembic
-    command: sh -c "alembic upgrade head && uvicorn persola.api.main:app --host 0.0.0.0 --port 8002 --reload"
+      - ./diri-persola:/app
+    command: uvicorn persola.api.main:app --host 0.0.0.0 --port 8002 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     depends_on:
       persola-db:
         condition: service_healthy
+    networks:
+      - diri-persola-dev-network
+
+
 
   persola-ui:
     build:
-      context: ./ui
+      context: ./diri-persola/ui
       dockerfile: Dockerfile
-    container_name: persola-ui
+    image: diri-persola-dev-ui:latest
+    pull_policy: never
+    container_name: diri-persola-ui-dev
     restart: unless-stopped
+    logging: *minimal-logging
     ports:
       - "3000:3000"
     depends_on:
       - persola
+    networks:
+      - diri-persola-dev-network
 
 volumes:
   persola_db_data:
 
 networks:
-  default:
-    name: deepiri-dev-network
-    external: true
+  diri-persola-dev-network:
+    name: diri-persola-dev-network
+    driver: bridge
