@@ -170,3 +170,102 @@ class TestBlendPersonas:
             json={"persona1_id": p1["id"], "persona2_id": str(uuid.uuid4()), "ratio": 0.5},
         )
         assert r.status_code == 404
+
+
+class TestBlendMultiplePersonas:
+    async def test_preview_blend_returns_200_without_saving(self, http_client):
+        p1 = await _create_persona(http_client, {"name": "P1", "creativity": 0.0})
+        p2 = await _create_persona(http_client, {"name": "P2", "creativity": 0.5})
+        p3 = await _create_persona(http_client, {"name": "P3", "creativity": 1.0})
+
+        before = await http_client.get("/api/v1/personas")
+        r = await http_client.post(
+            "/api/v1/personas/blend/preview",
+            json={"persona_ids": [p1["id"], p2["id"], p3["id"]], "weights": [1, 1, 2]},
+        )
+        after = await http_client.get("/api/v1/personas")
+
+        assert r.status_code == 200, r.text
+        assert abs(r.json()["creativity"] - 0.625) < 0.001
+        assert len(after.json()) == len(before.json())
+
+    async def test_multi_persona_blend_saves_custom_name(self, http_client):
+        p1 = await _create_persona(http_client, {"name": "P1", "creativity": 0.0})
+        p2 = await _create_persona(http_client, {"name": "P2", "creativity": 1.0})
+        p3 = await _create_persona(http_client, {"name": "P3", "creativity": 0.5})
+
+        r = await http_client.post(
+            "/api/v1/personas/blend",
+            json={
+                "persona_ids": [p1["id"], p2["id"], p3["id"]],
+                "weights": [0.25, 0.5, 0.25],
+                "name": "Saved Multi Blend",
+                "description": "Custom blend description",
+            },
+        )
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["name"] == "Saved Multi Blend"
+        assert body["description"] == "Custom blend description"
+        assert abs(body["creativity"] - 0.625) < 0.001
+
+        listed = await http_client.get("/api/v1/personas")
+        assert "Saved Multi Blend" in [persona["name"] for persona in listed.json()]
+
+    async def test_multi_persona_blend_validates_weight_count(self, http_client):
+        p1 = await _create_persona(http_client, {"name": "P1"})
+        p2 = await _create_persona(http_client, {"name": "P2"})
+
+        r = await http_client.post(
+            "/api/v1/personas/blend",
+            json={"persona_ids": [p1["id"], p2["id"]], "weights": [1.0]},
+        )
+
+        assert r.status_code == 400
+
+    async def test_multi_persona_blend_rejects_non_positive_weights(self, http_client):
+        p1 = await _create_persona(http_client, {"name": "P1"})
+        p2 = await _create_persona(http_client, {"name": "P2"})
+
+        r = await http_client.post(
+            "/api/v1/personas/blend/preview",
+            json={"persona_ids": [p1["id"], p2["id"]], "weights": [1.0, 0.0]},
+        )
+
+        assert r.status_code == 400
+
+
+class TestHealthEndpoint:
+    async def test_health_uses_dynamic_cyrex_availability(self, http_client, monkeypatch):
+        import importlib
+
+        main = importlib.import_module("persola.api.main")
+
+        async def fake_check_db_health():
+            return True
+
+        async def fake_is_available():
+            return True
+
+        monkeypatch.setattr(main, "check_db_health", fake_check_db_health)
+        monkeypatch.setattr(main.cyrex_client, "is_available", fake_is_available)
+
+        r = await http_client.get("/health")
+
+        assert r.status_code == 200
+        assert r.json()["cyrex_available"] is True
+
+    async def test_cyrex_status_gracefully_reports_unconfigured(self, http_client, monkeypatch):
+        import importlib
+
+        main = importlib.import_module("persola.api.main")
+
+        monkeypatch.setattr(main.cyrex_client, "base_url", "")
+        monkeypatch.setattr(main.cyrex_client, "api_key", "")
+
+        r = await http_client.get("/api/v1/cyrex/status")
+
+        assert r.status_code == 200
+        assert r.json()["available"] is False
+        assert r.json()["configured"] is False
