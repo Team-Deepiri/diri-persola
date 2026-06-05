@@ -237,7 +237,7 @@ class TestBlendMultiplePersonas:
 
 
 class TestHealthEndpoint:
-    async def test_health_uses_dynamic_cyrex_availability(self, http_client, monkeypatch):
+    async def test_health_is_independent_of_cyrex(self, http_client, monkeypatch):
         import importlib
 
         main = importlib.import_module("persola.api.main")
@@ -245,16 +245,17 @@ class TestHealthEndpoint:
         async def fake_check_db_health():
             return True
 
-        async def fake_is_available():
-            return True
+        async def fail_if_called():
+            raise AssertionError("health endpoint should not call cyrex")
 
         monkeypatch.setattr(main, "check_db_health", fake_check_db_health)
-        monkeypatch.setattr(main.cyrex_client, "is_available", fake_is_available)
+        monkeypatch.setattr(main.cyrex_client, "is_available", fail_if_called)
 
         r = await http_client.get("/health")
 
         assert r.status_code == 200
-        assert r.json()["cyrex_available"] is True
+        assert "cyrex_available" not in r.json()
+        assert r.json()["database"] is True
 
     async def test_cyrex_status_gracefully_reports_unconfigured(self, http_client, monkeypatch):
         import importlib

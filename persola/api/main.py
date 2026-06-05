@@ -211,11 +211,9 @@ app.add_route("/metrics", metrics_endpoint, methods=["GET"])
 @app.get("/health")
 async def health(db: AsyncSession = Depends(get_db)):
     db_ok = await check_db_health()
-    cyrex_status = await cyrex_client.is_available()
     return {
         "status": db_ok and "healthy" or "degraded",
         "database": db_ok,
-        "cyrex_available": cyrex_status,
         "llm_provider": os.getenv("OPENAI_API_KEY") and "openai" or os.getenv("ANTHROPIC_API_KEY") and "anthropic" or "ollama",
     }
 
