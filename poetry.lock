@@ -2104,8 +2104,5 @@ openai = []
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-<<<<<<< dependabot/pip/pip-51f24ed7e3
 content-hash = "feeb3973518f33e0c5c593a8265d7948d0e78d6f49db9f69ad83b12a4089447f"
-=======
 content-hash = "395d451a5d4c865f73587f966d9dfb2300bab522190b9a21acd20e2d5050d67a"
->>>>>>> main
