@@ -214,7 +214,6 @@ async def health(db: AsyncSession = Depends(get_db)):
     return {
         "status": db_ok and "healthy" or "degraded",
         "database": db_ok,
-        "cyrex_available": HAS_CYREX,
         "llm_provider": os.getenv("OPENAI_API_KEY") and "openai" or os.getenv("ANTHROPIC_API_KEY") and "anthropic" or "ollama",
     }
 
@@ -467,14 +466,86 @@ async def delete_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
 
 
 class BlendRequest(BaseModel):
-    persona1_id: str
-    persona2_id: str
+    persona1_id: str = None
+    persona2_id: str = None
     ratio: float = 0.5
+    persona_ids: List[str] = None
+    weights: List[float] = None
+    name: str = None
+    description: str = None
+
+
+class BlendPreviewRequest(BaseModel):
+    persona_ids: List[str]
+    weights: List[float]
+
+
+@app.post("/api/v1/personas/blend/preview", response_model=PersonaProfile)
+async def preview_blend(request: BlendPreviewRequest, db: AsyncSession = Depends(get_db)):
+    """Preview a blend without saving to DB."""
+    repo = PersonaRepository(db)
+    
+    if len(request.persona_ids) != len(request.weights):
+        raise HTTPException(status_code=400, detail="Number of persona_ids must equal number of weights")
+    
+    # Fetch all personas
+    personas = []
+    for persona_id in request.persona_ids:
+        persona = await repo.get(UUID(persona_id))
+        if persona is None:
+            raise HTTPException(status_code=404, detail=f"Persona {persona_id} not found")
+        personas.append(_to_persona_profile(persona))
+    
+    # Blend without saving
+    try:
+        blended = engine.blend_multiple(personas, request.weights)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    return blended
 
 
 @app.post("/api/v1/personas/blend", response_model=PersonaProfile)
 async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
+    
+    # Handle new multi-persona format
+    if request.persona_ids is not None:
+        if len(request.persona_ids) != len(request.weights or []):
+            raise HTTPException(status_code=400, detail="Number of persona_ids must equal number of weights")
+        
+        # Fetch all personas
+        personas = []
+        for persona_id in request.persona_ids:
+            persona = await repo.get(UUID(persona_id))
+            if persona is None:
+                raise HTTPException(status_code=404, detail=f"Persona {persona_id} not found")
+            personas.append(_to_persona_profile(persona))
+        
+        # Blend multiple personas
+        try:
+            blended = engine.blend_multiple(personas, request.weights)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # Use provided name or auto-generated name
+        if request.name:
+            blended.name = request.name
+        
+        # Use provided description or auto-generated description
+        if request.description:
+            blended.description = request.description
+        
+        created = await repo.create(_to_persona_model(blended))
+        summary = f"Multi-persona blend with weights {request.weights}"
+        await _record_persona_version(db, created, source="blend", summary=summary)
+        await db.commit()
+        return _to_persona_profile(created)
+    
+    # Handle old 2-persona format (backward compatibility)
+    if request.persona1_id is None or request.persona2_id is None:
+        raise HTTPException(status_code=400, detail="Either (persona1_id, persona2_id, ratio) or (persona_ids, weights) must be provided")
+    
     persona1 = await repo.get(UUID(request.persona1_id))
     persona2 = await repo.get(UUID(request.persona2_id))
 
@@ -1001,6 +1072,95 @@ async def invoke_agent(
             "message": body.message,
             "error": "internal_error",
         }
+
+
+# ---------------------------------------------------------------------------
+# Team orchestration (multi-personality agents)
+# ---------------------------------------------------------------------------
+
+_team_sessions: Dict[str, object] = {}
+_team_bucket = TokenBucketRateLimiter(capacity=20, refill_rate=0.3)
+
+
+async def _team_rate_limit(request: Request) -> None:
+    identifier = get_remote_address(request)
+    allowed, _ = await _team_bucket.consume(identifier)
+    if not allowed:
+        raise HTTPException(status_code=429, detail="Team invoke rate limit exceeded")
+
+
+class TeamInvokeRequest(BaseModel):
+    task: str = Field(..., min_length=1)
+    session_id: Optional[str] = None
+    persona_id: Optional[str] = None
+
+
+@app.get("/api/v1/teams/personalities")
+async def list_team_personalities():
+    from ..orchestration.personalities import list_archetypes
+
+    return [
+        {
+            "role": a.role.value,
+            "name": a.name,
+            "tagline": a.tagline,
+            "strengths": list(a.strengths),
+            "collaboration_style": a.collaboration_style,
+        }
+        for a in list_archetypes()
+    ]
+
+
+@app.get("/api/v1/teams/tools")
+async def list_team_tools():
+    from ..orchestration.tools import build_default_registry
+
+    registry = build_default_registry("preview")
+    return registry.list_tools()
+
+
+@app.post("/api/v1/teams/invoke")
+@limiter.limit("20/minute")
+async def invoke_team(
+    request: Request,
+    body: TeamInvokeRequest,
+    db: AsyncSession = Depends(get_db),
+    _rl: None = Depends(_team_rate_limit),
+):
+    from ..integrations.llm import get_llm_provider
+    from ..orchestration.team import TeamOrchestrator
+
+    profile = None
+    if body.persona_id:
+        persona_repo = PersonaRepository(db)
+        row = await persona_repo.get(UUID(body.persona_id))
+        if row:
+            profile = _to_persona_profile(row)
+
+    llm = get_llm_provider()
+    if not llm.is_available():
+        raise HTTPException(status_code=503, detail="No LLM provider available")
+
+    async def llm_fn(system: str, user: str) -> str:
+        return await llm.chat(
+            [{"role": "user", "content": user}],
+            system_prompt=system,
+        )
+
+    orchestrator = TeamOrchestrator(llm_fn=llm_fn, persona_profile=profile)
+    existing = _team_sessions.get(body.session_id) if body.session_id else None
+    result = await orchestrator.run(body.task, session=existing)  # type: ignore[arg-type]
+    _team_sessions[result.session_id] = result.session
+
+    return result.to_dict()
+
+
+@app.get("/api/v1/teams/sessions/{session_id}")
+async def get_team_session(session_id: str):
+    session = _team_sessions.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Team session not found")
+    return session.to_dict()  # type: ignore[union-attr]
 
 
 @app.get("/ui")

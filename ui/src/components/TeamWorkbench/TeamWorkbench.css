@@ -1,0 +1,78 @@
+.team-workbench {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.team-header h1 {
+  margin: 0 0 8px;
+}
+
+.personality-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.personality-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.personality-card h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+}
+
+.personality-card .tagline {
+  color: #64748b;
+  font-size: 0.85rem;
+  margin: 0 0 8px;
+}
+
+.personality-card .style {
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.team-run textarea {
+  width: 100%;
+  margin: 12px 0;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  font-family: inherit;
+}
+
+.team-run button {
+  background: #7c3aed;
+  color: white;
+  border: none;
+  padding: 10px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.team-run button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.session-id {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.error {
+  color: #b91c1c;
+}
+
+.team-result .response {
+  white-space: pre-wrap;
+  background: #f1f5f9;
+  padding: 16px;
+  border-radius: 10px;
+}

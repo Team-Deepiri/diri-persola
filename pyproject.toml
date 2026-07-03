@@ -41,6 +41,7 @@ dev = ["pytest", "pytest-asyncio", "pytest-cov", "black", "ruff", "mypy"]
 openai = ["openai"]
 anthropic = ["anthropic"]
 ollama = ["langchain-ollama"]
+agents = ["langchain-core"]
 
 [tool.poetry.scripts]
 persola = "persola.cli.main:cli"
