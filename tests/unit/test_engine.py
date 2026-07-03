@@ -129,6 +129,56 @@ class TestBlendPersonas:
 
 
 # ---------------------------------------------------------------------------
+# blend_multiple
+# ---------------------------------------------------------------------------
+
+class TestBlendMultiple:
+    def test_normalizes_weights_and_blends_all_personas(self, engine):
+        p1 = PersonaProfile(name="A", creativity=0.0, humor=0.2)
+        p2 = PersonaProfile(name="B", creativity=0.5, humor=0.4)
+        p3 = PersonaProfile(name="C", creativity=1.0, humor=0.8)
+
+        blended = engine.blend_multiple([p1, p2, p3], [1, 1, 2])
+
+        assert abs(blended.creativity - 0.625) < 0.001
+        assert abs(blended.humor - 0.55) < 0.001
+
+    def test_uses_model_settings_from_first_persona(self, engine):
+        p1 = PersonaProfile(name="A", model="first-model", temperature=0.3, max_tokens=123)
+        p2 = PersonaProfile(name="B", model="second-model", temperature=1.1, max_tokens=456)
+
+        blended = engine.blend_multiple([p1, p2], [0.5, 0.5])
+
+        assert blended.model == "first-model"
+        assert blended.temperature == 0.3
+        assert blended.max_tokens == 123
+
+    def test_generates_descriptive_name_and_description(self, engine):
+        p1 = PersonaProfile(name="A")
+        p2 = PersonaProfile(name="B")
+        p3 = PersonaProfile(name="C")
+
+        blended = engine.blend_multiple([p1, p2, p3], [0.5, 0.3, 0.2])
+
+        assert blended.name == "Blended: A, B, C"
+        assert "A (50%)" in blended.description
+        assert "B (30%)" in blended.description
+        assert "C (20%)" in blended.description
+
+    def test_requires_matching_profile_and_weight_counts(self, engine):
+        with pytest.raises(ValueError, match="Number of profiles"):
+            engine.blend_multiple([PersonaProfile(name="A"), PersonaProfile(name="B")], [1.0])
+
+    def test_requires_at_least_two_personas(self, engine):
+        with pytest.raises(ValueError, match="At least 2"):
+            engine.blend_multiple([PersonaProfile(name="A")], [1.0])
+
+    def test_rejects_non_positive_weights(self, engine):
+        with pytest.raises(ValueError, match="positive"):
+            engine.blend_multiple([PersonaProfile(name="A"), PersonaProfile(name="B")], [1.0, 0.0])
+
+
+# ---------------------------------------------------------------------------
 # apply_preset
 # ---------------------------------------------------------------------------
 

@@ -7,6 +7,7 @@ from .message_repository import MessageRepository
 from .persona_repository import PersonaRepository
 from .persona_version_repository import PersonaVersionRepository
 from .session_repository import SessionRepository
+from .team_repository import TeamMemoryRepository, TeamSessionRepository, TeamWorkflowRepository, TeamWorkflowStepRepository
 
 __all__ = [
     "AnalysisRunRepository",
@@ -18,4 +19,8 @@ __all__ = [
     "PersonaRepository",
     "PersonaVersionRepository",
     "SessionRepository",
+    "TeamMemoryRepository",
+    "TeamSessionRepository",
+    "TeamWorkflowRepository",
+    "TeamWorkflowStepRepository",
 ]

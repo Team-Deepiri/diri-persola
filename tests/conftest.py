@@ -14,7 +14,21 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+
+@compiles(JSONB, "sqlite")
+def _compile_jsonb_for_sqlite(type_, compiler, **kw):
+    """Allow PostgreSQL JSONB columns to be created in SQLite-backed tests."""
+    return "JSON"
+
+
+@pytest.fixture()
+def anyio_backend():
+    """Run async tests only on asyncio; the app and DB fixtures are asyncio-based."""
+    return "asyncio"
 
 
 # ---------------------------------------------------------------------------
