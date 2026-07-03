@@ -277,6 +277,46 @@ Always respond according to these parameters while being helpful and accurate.""
             **{**blended_knobs, "model": profile1.model, "temperature": profile1.temperature},
         )
     
+    def blend_multiple(self, profiles: List[PersonaProfile], weights: List[float]) -> PersonaProfile:
+        """
+        Blend N personas with N weights.
+        - Normalize weights to sum to 1.0 (e.g. [1,1,1] → [0.33,0.33,0.33])
+        - Each knob = sum(knob_i * weight_i) across all personas
+        - Use model/temperature/max_tokens from the first persona
+        - Generate descriptive name and description showing the blend composition
+        """
+        if len(profiles) != len(weights):
+            raise ValueError("Number of profiles must equal number of weights")
+        if len(profiles) < 2:
+            raise ValueError("At least 2 personas required for blending")
+        if any(w <= 0 for w in weights):
+            raise ValueError("All weights must be positive")
+        
+        # Normalize weights to sum to 1.0
+        total_weight = sum(weights)
+        normalized_weights = [w / total_weight for w in weights]
+        
+        # Blend knobs
+        blended_knobs = {}
+        all_knobs = profiles[0].get_knobs()
+        for key in all_knobs:
+            blended_knobs[key] = sum(
+                profile.get_knobs()[key] * weight
+                for profile, weight in zip(profiles, normalized_weights)
+            )
+        
+        # Generate description with composition percentages
+        composition_parts = [
+            f"{profile.name} ({weight*100:.0f}%)"
+            for profile, weight in zip(profiles, normalized_weights)
+        ]
+        
+        return PersonaProfile(
+            name=f"Blended: {', '.join(p.name for p in profiles)}",
+            description=f"Blend of {', '.join(composition_parts)}",
+            **{**blended_knobs, "model": profiles[0].model, "temperature": profiles[0].temperature, "max_tokens": profiles[0].max_tokens},
+        )
+    
     def apply_preset(self, preset: PresetName) -> PersonaProfile:
         return DEFAULT_PRESETS[preset].model_copy()
     
