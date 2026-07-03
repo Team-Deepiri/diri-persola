@@ -117,6 +117,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from .teams import router as teams_router
+
+app.include_router(teams_router)
+
 engine = PersonaEngine()
 cyrex_client = CyrexClient()
 style_extractor = WritingStyleExtractor()
@@ -1072,95 +1076,6 @@ async def invoke_agent(
             "message": body.message,
             "error": "internal_error",
         }
-
-
-# ---------------------------------------------------------------------------
-# Team orchestration (multi-personality agents)
-# ---------------------------------------------------------------------------
-
-_team_sessions: Dict[str, object] = {}
-_team_bucket = TokenBucketRateLimiter(capacity=20, refill_rate=0.3)
-
-
-async def _team_rate_limit(request: Request) -> None:
-    identifier = get_remote_address(request)
-    allowed, _ = await _team_bucket.consume(identifier)
-    if not allowed:
-        raise HTTPException(status_code=429, detail="Team invoke rate limit exceeded")
-
-
-class TeamInvokeRequest(BaseModel):
-    task: str = Field(..., min_length=1)
-    session_id: Optional[str] = None
-    persona_id: Optional[str] = None
-
-
-@app.get("/api/v1/teams/personalities")
-async def list_team_personalities():
-    from ..orchestration.personalities import list_archetypes
-
-    return [
-        {
-            "role": a.role.value,
-            "name": a.name,
-            "tagline": a.tagline,
-            "strengths": list(a.strengths),
-            "collaboration_style": a.collaboration_style,
-        }
-        for a in list_archetypes()
-    ]
-
-
-@app.get("/api/v1/teams/tools")
-async def list_team_tools():
-    from ..orchestration.tools import build_default_registry
-
-    registry = build_default_registry("preview")
-    return registry.list_tools()
-
-
-@app.post("/api/v1/teams/invoke")
-@limiter.limit("20/minute")
-async def invoke_team(
-    request: Request,
-    body: TeamInvokeRequest,
-    db: AsyncSession = Depends(get_db),
-    _rl: None = Depends(_team_rate_limit),
-):
-    from ..integrations.llm import get_llm_provider
-    from ..orchestration.team import TeamOrchestrator
-
-    profile = None
-    if body.persona_id:
-        persona_repo = PersonaRepository(db)
-        row = await persona_repo.get(UUID(body.persona_id))
-        if row:
-            profile = _to_persona_profile(row)
-
-    llm = get_llm_provider()
-    if not llm.is_available():
-        raise HTTPException(status_code=503, detail="No LLM provider available")
-
-    async def llm_fn(system: str, user: str) -> str:
-        return await llm.chat(
-            [{"role": "user", "content": user}],
-            system_prompt=system,
-        )
-
-    orchestrator = TeamOrchestrator(llm_fn=llm_fn, persona_profile=profile)
-    existing = _team_sessions.get(body.session_id) if body.session_id else None
-    result = await orchestrator.run(body.task, session=existing)  # type: ignore[arg-type]
-    _team_sessions[result.session_id] = result.session
-
-    return result.to_dict()
-
-
-@app.get("/api/v1/teams/sessions/{session_id}")
-async def get_team_session(session_id: str):
-    session = _team_sessions.get(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Team session not found")
-    return session.to_dict()  # type: ignore[union-attr]
 
 
 @app.get("/ui")

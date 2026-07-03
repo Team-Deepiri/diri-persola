@@ -419,3 +419,94 @@ class AgentRunModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 		self.model = model
 		self.tokens_used = tokens_used
 		self.completed_at = datetime.utcnow()
+
+
+class TeamWorkflowStatus(str, Enum):
+	PENDING = "pending"
+	RUNNING = "running"
+	COMPLETED = "completed"
+	FAILED = "failed"
+
+
+class TeamSessionModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+	__tablename__ = "team_sessions"
+	__table_args__ = (Index("idx_team_sessions_external_id", "external_session_id"),)
+
+	external_session_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+	name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+	persona_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("personas.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	team_config: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	memory_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+	workflows: Mapped[list["TeamWorkflowModel"]] = relationship(back_populates="team_session", cascade="all, delete-orphan")
+	memory_entries: Mapped[list["TeamMemoryModel"]] = relationship(back_populates="team_session", cascade="all, delete-orphan")
+
+
+class TeamWorkflowModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+	__tablename__ = "team_workflows"
+	__table_args__ = (
+		Index("idx_team_workflows_session_id", "team_session_id"),
+		Index("idx_team_workflows_status", "status"),
+		_enum_constraint("status", tuple(s.value for s in TeamWorkflowStatus), name="ck_team_workflows_status_values"),
+	)
+
+	team_session_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("team_sessions.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	goal: Mapped[str] = mapped_column(Text, nullable=False)
+	status: Mapped[str] = mapped_column(String(30), nullable=False, default=TeamWorkflowStatus.PENDING.value)
+	delegation_plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	final_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+	personalities_used: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+	tool_results: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+	completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+	team_session: Mapped["TeamSessionModel"] = relationship(back_populates="workflows")
+	steps: Mapped[list["TeamWorkflowStepModel"]] = relationship(back_populates="workflow", cascade="all, delete-orphan")
+
+
+class TeamWorkflowStepModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+	__tablename__ = "team_workflow_steps"
+	__table_args__ = (Index("idx_team_workflow_steps_workflow_id", "workflow_id"),)
+
+	workflow_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("team_workflows.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	step_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+	role: Mapped[str] = mapped_column(String(50), nullable=False)
+	task: Mapped[str] = mapped_column(Text, nullable=False)
+	output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+	tool_calls: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+	parallel_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
+	duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+	workflow: Mapped["TeamWorkflowModel"] = relationship(back_populates="steps")
+
+
+class TeamMemoryModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+	__tablename__ = "team_memory"
+	__table_args__ = (
+		Index("idx_team_memory_session_id", "team_session_id"),
+		Index("idx_team_memory_key", "memory_key"),
+	)
+
+	team_session_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("team_sessions.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	memory_key: Mapped[str] = mapped_column(String(255), nullable=False)
+	value: Mapped[str] = mapped_column(Text, nullable=False)
+	tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+	source_role: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+	team_session: Mapped["TeamSessionModel"] = relationship(back_populates="memory_entries")

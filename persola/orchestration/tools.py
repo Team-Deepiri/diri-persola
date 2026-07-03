@@ -93,4 +93,11 @@ def build_default_registry(session_id: str) -> ToolRegistry:
     registry.register(
         ToolSpec("echo", "Echo text (debug / connectivity).", _echo, tags=["utility"])
     )
+
+    async def _delegate(**kwargs: Any) -> Dict[str, Any]:
+        return {"delegated_to": kwargs.get("role", "executor"), "subtask": kwargs.get("subtask", ""), "status": "queued"}
+
+    registry.register(
+        ToolSpec("delegate_subtask", "Queue a subtask for another personality.", _delegate, tags=["workflow"])
+    )
     return registry
