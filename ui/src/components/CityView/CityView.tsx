@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CityGraph, type GraphFamily, type GraphMember, type GraphPulse } from './CityGraph';
+import { CityOverview } from './CityOverview';
 import './CityView.css';
 
 type FamilySummary = {
@@ -242,6 +243,7 @@ export function CityView() {
   const [generations, setGenerations] = useState<GenerationsPayload | null>(null);
   const [chronicle, setChronicle] = useState<ChroniclePayload | null>(null);
   const [eraOpen, setEraOpen] = useState(true);
+  const [vizMode, setVizMode] = useState<'overview' | 'districts'>('overview');
   const [cityMode, setCityMode] = useState(true);
   const [job, setJob] = useState<Job | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -917,6 +919,28 @@ export function CityView() {
           <button type="button" className="btn ghost" onClick={() => setCityMode(true)} disabled={loading}>
             City view
           </button>
+          <button
+            type="button"
+            className={`btn ghost${vizMode === 'overview' ? ' primary' : ''}`}
+            onClick={() => {
+              setCityMode(true);
+              setVizMode('overview');
+            }}
+            disabled={loading}
+          >
+            Overall viz
+          </button>
+          <button
+            type="button"
+            className={`btn ghost${vizMode === 'districts' ? ' primary' : ''}`}
+            onClick={() => {
+              setCityMode(true);
+              setVizMode('districts');
+            }}
+            disabled={loading}
+          >
+            Districts
+          </button>
           <button type="button" className="btn ghost" onClick={onSeed} disabled={loading}>
             Seed family
           </button>
@@ -1154,21 +1178,38 @@ export function CityView() {
             <div className="panel-head">
               <h2>
                 {cityMode
-                  ? 'Living city · districts'
+                  ? vizMode === 'overview'
+                    ? 'Overall ecosystem'
+                    : 'Living city · districts'
                   : `Lineage · ${family?.name ?? 'family'}`}
               </h2>
               <span className="pill">
                 {graphFamilies.reduce((n, f) => n + f.members.length, 0)} agents
               </span>
             </div>
-            <CityGraph
-              families={graphFamilies}
-              pulses={pulses}
-              selectedAgentId={selected?.agent_id ?? null}
-              onSelectAgent={setSelected}
-              districtFilter={districtFilter}
-              height={cityMode ? 560 : 320}
-            />
+            {cityMode && vizMode === 'overview' ? (
+              <CityOverview
+                families={graphFamilies}
+                familyMeta={generations?.families}
+                generations={generations?.generations}
+                pulses={pulses}
+                living={ecosystem?.city.living ?? snapshot?.agent_count ?? 0}
+                deceased={ecosystem?.city.deceased ?? 0}
+                continuityOk={generations?.continuity_ok}
+                selectedAgentId={selected?.agent_id ?? null}
+                onSelectAgent={setSelected}
+                height={560}
+              />
+            ) : (
+              <CityGraph
+                families={graphFamilies}
+                pulses={pulses}
+                selectedAgentId={selected?.agent_id ?? null}
+                onSelectAgent={setSelected}
+                districtFilter={districtFilter}
+                height={cityMode ? 560 : 320}
+              />
+            )}
           </div>
 
           {selected && (

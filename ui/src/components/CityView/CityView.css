@@ -2,6 +2,7 @@
   max-width: 1400px;
   margin: 0 auto;
   padding: 24px;
+  font-family: 'Outfit', system-ui, sans-serif;
 }
 
 .city-header {
@@ -16,6 +17,7 @@
   margin: 0 0 6px;
   font-size: 1.75rem;
   letter-spacing: -0.02em;
+  font-family: 'Fraunces', Georgia, serif;
 }
 
 .city-sub {
@@ -46,10 +48,10 @@
   cursor: not-allowed;
 }
 
-.btn.primary {
-  background: #0f766e;
-  border-color: #0f766e;
-  color: #fff;
+.btn.ghost.primary {
+  background: #14231f;
+  color: #f7f3eb;
+  border-color: #14231f;
 }
 
 .btn.ghost:hover:not(:disabled),

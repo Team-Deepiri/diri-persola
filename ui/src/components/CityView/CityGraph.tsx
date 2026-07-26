@@ -22,6 +22,7 @@ export type GraphMember = {
   dreams?: string[];
   structured_thinking?: number;
   growth?: number;
+  successor_of_id?: string | null;
 };
 
 export type GraphPulse = {
