@@ -1,6 +1,6 @@
 # Persola Communal City — Full Implementation Roadmap
 
-**Status:** Implemented (Phases 0–11)  
+**Status:** Implemented (Phases 0–12)  
 **Depends on:** [COMMUNAL_CITY_DESIGN.md](./COMMUNAL_CITY_DESIGN.md)  
 **Baseline:** Persola personality engine + team orchestration (LangGraph, Team Workbench) already in repo
 
@@ -34,6 +34,8 @@ Phase 9  Austin export pack + disk commons + cinema demo
 Phase 10 City conductor — LLM team-invoke across families
     │
 Phase 11 Memorial + prod ops — era roll, life metrics, Cyrex living sync, ASGI workers
+    │
+Phase 12 Chronicle + Austin stream — era timeline, life SSE filters, city health, compose fix
 ```
 
 ---
@@ -354,6 +356,26 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8h. Phase 12 — Chronicle + Austin stream hardening
+
+**Goal:** Austin (and operators) can follow the city's era as a timeline and stream life events city-wide.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `GET /api/v1/city/chronicle` | Era timeline; `life_only=true` filters death/legacy/spawn |
+| `GET /api/v1/city/health` | Readiness: db + living/deceased + queue |
+| SSE `city_wide` + `types=` | Stream without family_id; filter `member.died,legacy.passed,…` |
+| Austin pack **v1.2** | Includes `chronicle` + life stream hints |
+| Compose / Dockerfile | Repo-root build context; entrypoint auto-migrate; city healthcheck |
+
+### 8h.1 Exit criteria
+
+- Chronicle after life tick includes death/legacy events.
+- City-wide SSE hello advertises `city_wide` + types.
+- `GET /city/health` returns `ok: true` against test DB.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -414,14 +436,15 @@ docs/
 - [x] **P9** Austin export pack + disk commons mirror + cinema demo
 - [x] **P10** City conductor — LLM team-invoke / tool fallback across families
 - [x] **P11** Memorial + life metrics + Cyrex living sync + prod ASGI
+- [x] **P12** Chronicle + city-wide life SSE + health + compose fix
 
 ---
 
 ## 13. Immediate next implementation step
 
-Phases 0–11 are on the communal-city branch. Remaining:
+Phases 0–12 are on the communal-city branch. Remaining:
 
-1. Staging: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up` + `alembic upgrade head`.
-2. Wire Austin to pack **v1.1** + memorial/SSE (`member.died`, `legacy.passed`).
-3. Point `CYREX_URL` / `CYREX_API_KEY` at staging and run `POST /city/cyrex/sync` (dry_run first).
-4. Optional: remove deprecated `persola/db/tables.py` / `config.py` after one release.
+1. Staging: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build` with `PERSOLA_AUTO_MIGRATE=1`.
+2. Austin: consume pack **v1.2** (`chronicle`) and SSE `?city_wide=true&types=member.died,legacy.passed,life.aged`.
+3. Point `CYREX_URL` / `CYREX_API_KEY` at staging; `POST /city/cyrex/sync` dry_run then live.
+4. Optional: remove deprecated `persola/db/tables.py` / `config.py`.

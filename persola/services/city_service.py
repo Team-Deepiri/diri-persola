@@ -609,11 +609,13 @@ class CityService:
 		job_id: UUID | None = None,
 		after_id: UUID | None = None,
 		since: datetime | None = None,
+		event_types: list[str] | None = None,
 		limit: int = 100,
+		city_wide: bool = False,
 	) -> list[dict[str, Any]]:
 		"""Incremental event fetch for SSE / polling (Austin live stream)."""
-		if family_id is None and job_id is None:
-			raise ValueError("family_id or job_id required")
+		if family_id is None and job_id is None and not city_wide:
+			raise ValueError("family_id or job_id required (or city_wide=true)")
 		if family_id is not None and await self.families.get(family_id) is None:
 			raise ValueError("Family not found")
 		if job_id is not None and await self.jobs.get(job_id) is None:
@@ -623,9 +625,105 @@ class CityService:
 			job_id=job_id,
 			after_id=after_id,
 			since=since,
+			event_types=event_types,
 			limit=limit,
 		)
 		return [self._serialize_event(r) for r in rows]
+
+	LIFE_EVENT_TYPES: tuple[str, ...] = (
+		"life.aged",
+		"member.died",
+		"legacy.passed",
+		"agent.spawned",
+		"family.created",
+		"city.pulse.started",
+		"city.pulse.finished",
+		"cohesion.merge",
+		"cohesion.veto",
+		"cyrex.sync.finished",
+	)
+
+	async def city_chronicle(
+		self,
+		*,
+		limit: int = 80,
+		life_only: bool = False,
+		family_id: UUID | None = None,
+	) -> dict[str, Any]:
+		"""
+		Phase 12 — era timeline for Austin / operators.
+
+		Chronological life of the city: births, aging, death, legacy, pulses.
+		"""
+		wanted = (
+			{
+				"life.aged",
+				"member.died",
+				"legacy.passed",
+				"agent.spawned",
+				"family.created",
+			}
+			if life_only
+			else None
+		)
+		fetch_n = limit * 4 if life_only else limit
+		if family_id is not None:
+			if await self.families.get(family_id) is None:
+				raise ValueError("Family not found")
+			raw = await self.events.list_for_family(family_id, limit=fetch_n)
+		else:
+			raw = await self.events.list_recent(limit=fetch_n)
+
+		if wanted is not None:
+			raw = [r for r in raw if r.event_type in wanted]
+		rows = raw[-limit:] if len(raw) > limit else raw
+		events = [self._serialize_event(r) for r in rows]
+		eco = await self.city_ecosystem(event_limit=10)
+		mem = await self.city_memorial(limit=40)
+		eras: dict[str, int] = {}
+		for e in events:
+			payload = e.get("payload") or {}
+			gen = payload.get("generation")
+			if gen is not None:
+				key = f"G{gen}"
+				eras[key] = eras.get(key, 0) + 1
+
+		return {
+			"chronicle_version": "1.0",
+			"events": events,
+			"count": len(events),
+			"eras": eras,
+			"city": eco.get("city") or {},
+			"memorial_count": mem.get("count", 0),
+			"hints": {
+				"stream_life": "GET /api/v1/city/events/stream?city_wide=true&types=member.died,legacy.passed,life.aged",
+				"memorial": "GET /api/v1/city/memorial",
+				"export": "GET /api/v1/city/export/austin",
+			},
+		}
+
+	async def city_health(self) -> dict[str, Any]:
+		"""Phase 12 — city readiness probe for compose / load balancers."""
+		from ..orchestration.city_worker import CITY_WORKER_POOL
+
+		try:
+			eco = await self.city_ecosystem(event_limit=5)
+		except Exception as exc:  # noqa: BLE001
+			return {"ok": False, "db": False, "detail": str(exc)}
+
+		city = eco.get("city") or {}
+		living = int(city.get("living") or 0)
+		return {
+			"ok": True,
+			"db": True,
+			"living": living,
+			"deceased": int(city.get("deceased") or 0),
+			"families": int(city.get("family_count") or 0),
+			"generation_max": int(city.get("generation_max") or 0),
+			"avg_efficiency": city.get("avg_efficiency"),
+			"queue_depth": getattr(CITY_WORKER_POOL, "queue_depth", 0),
+			"status": "alive" if living > 0 else "dormant",
+		}
 
 	# ── Commons helpers for Phase 2 (usable now for persistence tests) ──
 
@@ -2044,9 +2142,10 @@ class CityService:
 						)
 
 		eco = await self.city_ecosystem(event_limit=min(40, event_limit))
+		chronicle = await self.city_chronicle(limit=min(60, event_limit), life_only=True)
 
 		return {
-			"pack_version": "1.1",
+			"pack_version": "1.2",
 			"contract": "docs/CITY_EVENTS.md",
 			"generated_at": datetime.utcnow().isoformat(),
 			"vitals": {
@@ -2062,6 +2161,7 @@ class CityService:
 			},
 			"graph": {"nodes": graph_nodes, "edges": graph_edges},
 			"ecosystems": eco.get("ecosystems") or [],
+			"chronicle": chronicle,
 			"events": snap.get("events") or [],
 			"artifacts": artifacts_sample,
 			"heartbeat": heartbeat,
@@ -2069,8 +2169,11 @@ class CityService:
 			"hints": {
 				"poll": "GET /api/v1/city/events?family_id=…&after=…",
 				"stream": "GET /api/v1/city/events/stream?family_id=…",
+				"stream_life": "GET /api/v1/city/events/stream?city_wide=true&types=member.died,legacy.passed,life.aged",
 				"snapshot": "GET /api/v1/city/snapshot",
 				"ecosystem": "GET /api/v1/city/ecosystem",
+				"chronicle": "GET /api/v1/city/chronicle?life_only=true",
+				"memorial": "GET /api/v1/city/memorial",
 				"life_tick": "POST /api/v1/city/life/tick",
 				"export": "GET /api/v1/city/export/austin",
 			},

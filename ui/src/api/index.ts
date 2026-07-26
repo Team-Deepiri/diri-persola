@@ -103,6 +103,9 @@ export const cityApi = {
   heartbeatTick: () => api.post('/city/heartbeat/tick'),
   ecosystem: () => api.get('/city/ecosystem'),
   memorial: (limit = 100) => api.get('/city/memorial', { params: { limit } }),
+  chronicle: (params: { limit?: number; life_only?: boolean; family_id?: string } = {}) =>
+    api.get('/city/chronicle', { params }),
+  cityHealth: () => api.get('/city/health'),
   lifeTick: (body: { max_families?: number; force_age?: number } = {}) =>
     api.post('/city/life/tick', body),
   cyrexSyncCity: (body: { max_families?: number; living_only?: boolean; dry_run?: boolean } = {}) =>

@@ -10,6 +10,8 @@ External visualizations (Austin) and the Persola City UI consume the same event 
 
 ## Endpoints
 
+Pass ``types=member.died,legacy.passed,life.aged`` and/or ``city_wide=true`` to follow generational events across the city without a family id.
+
 ### Poll (≤2s recommended)
 
 ```http
@@ -30,14 +32,17 @@ Response:
 
 ```http
 GET /api/v1/city/events/stream?family_id={uuid}&after={event_id}&poll_seconds=1
+GET /api/v1/city/events/stream?city_wide=true&types=member.died,legacy.passed,life.aged&poll_seconds=1
 ```
 
 - Content-Type: `text/event-stream`
 - Named event: `city`
 - Data: single JSON object per message (same shape as poll items)
 - Keepalive comments: `: keepalive`
-- First message may be `stream.hello` (non-persisted control event)
+- First message may be `stream.hello` (non-persisted control event; includes `city_wide` / `types` when set)
 - Optional `max_cycles` ends the stream with `stream.done` (useful for tests / finite clients)
+- `city_wide=true` streams across families (no `family_id` required)
+- `types=` comma-separated event type filter (Phase 12)
 
 Example client:
 

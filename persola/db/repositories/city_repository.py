@@ -207,6 +207,7 @@ class CityEventRepository(BaseRepository[CityEventModel]):
 		job_id: UUID | None = None,
 		after_id: UUID | None = None,
 		since: datetime | None = None,
+		event_types: list[str] | None = None,
 		limit: int = 100,
 	) -> list[CityEventModel]:
 		filters = []
@@ -214,6 +215,8 @@ class CityEventRepository(BaseRepository[CityEventModel]):
 			filters.append(CityEventModel.family_id == family_id)
 		if job_id is not None:
 			filters.append(CityEventModel.job_id == job_id)
+		if event_types:
+			filters.append(CityEventModel.event_type.in_(list(event_types)))
 		if after_id is not None:
 			anchor = await self.get(after_id)
 			if anchor is not None:

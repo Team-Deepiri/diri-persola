@@ -438,6 +438,8 @@ async def stream_city_events(
 	family_id: Optional[str] = None,
 	job_id: Optional[str] = None,
 	after: Optional[str] = None,
+	types: Optional[str] = None,
+	city_wide: bool = False,
 	poll_seconds: float = 1.0,
 	max_cycles: int = 0,
 ):
@@ -446,6 +448,7 @@ async def stream_city_events(
 
 	Each message is ``event: city`` with JSON data matching docs/CITY_EVENTS.md.
 	Set ``max_cycles`` > 0 to end the stream after N poll loops (tests / finite clients).
+	Pass ``types=member.died,legacy.passed`` to filter; ``city_wide=true`` for all families.
 	"""
 	import asyncio
 	import json
@@ -455,12 +458,16 @@ async def stream_city_events(
 
 	from ..db.database import AsyncSessionLocal
 
-	if not family_id and not job_id:
-		raise HTTPException(status_code=400, detail="family_id or job_id required")
+	if not family_id and not job_id and not city_wide:
+		raise HTTPException(
+			status_code=400,
+			detail="family_id or job_id required (or city_wide=true)",
+		)
 
 	family_uuid = UUID(family_id) if family_id else None
 	job_uuid = UUID(job_id) if job_id else None
 	after_uuid = UUID(after) if after else None
+	type_list = [t.strip() for t in (types or "").split(",") if t.strip()] or None
 	interval = min(max(poll_seconds, 0.25), 5.0)
 	cycles_limit = max(0, int(max_cycles))
 
@@ -468,7 +475,12 @@ async def stream_city_events(
 		cursor = after_uuid
 		hello = {
 			"event_type": "stream.hello",
-			"payload": {"family_id": family_id, "job_id": job_id},
+			"payload": {
+				"family_id": family_id,
+				"job_id": job_id,
+				"city_wide": city_wide,
+				"types": type_list,
+			},
 			"created_at": datetime.utcnow().isoformat(),
 		}
 		yield f"event: city\ndata: {json.dumps(hello)}\n\n"
@@ -481,7 +493,9 @@ async def stream_city_events(
 						family_id=family_uuid,
 						job_id=job_uuid,
 						after_id=cursor,
+						event_types=type_list,
 						limit=50,
+						city_wide=city_wide and not family_uuid and not job_uuid,
 					)
 				for row in rows:
 					yield f"event: city\ndata: {json.dumps(row)}\n\n"
@@ -918,6 +932,32 @@ async def city_memorial(
 	"""Phase 11 — deceased roll + heirs (legacy continuity for viz)."""
 	service = CityService(db)
 	return await service.city_memorial(limit=min(max(limit, 1), 500))
+
+
+@router.get("/chronicle")
+async def city_chronicle(
+	limit: int = 80,
+	life_only: bool = False,
+	family_id: Optional[str] = None,
+	db: AsyncSession = Depends(get_db),
+):
+	"""Phase 12 — era timeline (births, death, legacy, pulses) for Austin."""
+	service = CityService(db)
+	try:
+		return await service.city_chronicle(
+			limit=min(max(limit, 1), 300),
+			life_only=life_only,
+			family_id=UUID(family_id) if family_id else None,
+		)
+	except ValueError as exc:
+		raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/health")
+async def city_health(db: AsyncSession = Depends(get_db)):
+	"""Phase 12 — city readiness (db + living vitals + queue)."""
+	service = CityService(db)
+	return await service.city_health()
 
 
 @router.post("/cyrex/sync")
