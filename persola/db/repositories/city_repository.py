@@ -101,6 +101,19 @@ class WorkspaceArtifactRepository(BaseRepository[WorkspaceArtifactModel]):
 		result = await self.session.execute(query)
 		return list(result.scalars().all())
 
+	async def get_latest_by_path(self, job_id: UUID, path: str) -> WorkspaceArtifactModel | None:
+		query = (
+			select(WorkspaceArtifactModel)
+			.where(
+				WorkspaceArtifactModel.job_id == job_id,
+				WorkspaceArtifactModel.path == path,
+			)
+			.order_by(WorkspaceArtifactModel.version.desc())
+			.limit(1)
+		)
+		result = await self.session.execute(query)
+		return result.scalar_one_or_none()
+
 	async def latest_version(self, job_id: UUID, path: str) -> int:
 		query = (
 			select(WorkspaceArtifactModel.version)

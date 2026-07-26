@@ -74,16 +74,37 @@ class TeamOrchestrator:
         return f"{base}\n\n## Team role\n{archetype.system_directive}\n\nCollaboration style: {archetype.collaboration_style}"
 
     async def _make_tool_runner(self, registry: ToolRegistry) -> Callable[[str, str], Awaitable[List[Dict[str, Any]]]]:
+        from .tool_calls import parse_tool_calls
+
         async def runner(role: str, output: str) -> List[Dict[str, Any]]:
-            calls = [
-                {"name": "memory_store", "args": {"key": f"{role}:latest", "value": output[:2000], "source_role": role}},
-                {"name": "delegate_subtask", "args": {"role": "executor", "subtask": output[:500]}},
-            ]
+            parsed = parse_tool_calls(output)
+            if parsed:
+                calls = parsed
+            elif role == "executor" and registry.get("workspace_write") is not None:
+                # Executor with city tools but no structured calls: no silent fake tools.
+                calls = [
+                    {
+                        "name": "memory_store",
+                        "args": {"key": f"{role}:latest", "value": output[:2000], "source_role": role},
+                    }
+                ]
+            else:
+                calls = [
+                    {"name": "memory_store", "args": {"key": f"{role}:latest", "value": output[:2000], "source_role": role}},
+                    {"name": "delegate_subtask", "args": {"role": "executor", "subtask": output[:500]}},
+                ]
+
             executor = getattr(registry, "_executor", None)
             if executor is not None:
                 batch = await executor.run_batch(registry, calls)
                 return [
-                    {"name": r.name, "success": r.success, "result": r.result, "error": r.error, "duration_ms": r.duration_ms}
+                    {
+                        "name": r.name,
+                        "success": r.success,
+                        "result": r.result,
+                        "error": r.error,
+                        "duration_ms": r.duration_ms,
+                    }
                     for r in batch
                 ]
             return await registry.run_parallel(calls)

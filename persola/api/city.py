@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
 from ..db.models import CityDistrict, CityJobStatus
+from ..orchestration.city_tools import register_city_tools
+from ..orchestration.tool_calls import parse_tool_calls
+from ..orchestration.tools import ToolRegistry
 from ..services.city_service import CityService
 
 router = APIRouter(prefix="/api/v1/city", tags=["city"])
@@ -73,6 +76,21 @@ class StartJobRequest(BaseModel):
 	district: Optional[str] = None
 	team_session_id: Optional[str] = None
 	status: str = Field(default=CityJobStatus.PENDING.value)
+
+
+class ExecuteToolsRequest(BaseModel):
+	calls: list[dict[str, Any]] = Field(default_factory=list)
+	text: Optional[str] = None
+	agent_id: Optional[str] = None
+
+
+class InvokeJobRequest(BaseModel):
+	"""Execute structured tool calls for a job (Phase 2 build+run path)."""
+
+	calls: list[dict[str, Any]] = Field(default_factory=list)
+	text: Optional[str] = None
+	agent_id: Optional[str] = None
+	complete: bool = True
 
 
 @router.get("/families")
@@ -226,3 +244,91 @@ async def list_family_events(family_id: str, limit: int = 500, db: AsyncSession 
 		raise HTTPException(status_code=404, detail=str(exc)) from exc
 	except Exception as exc:
 		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/tools")
+async def list_city_tools(db: AsyncSession = Depends(get_db)):
+	"""List city build/run tools (preview registry without a live job)."""
+	from uuid import uuid4
+
+	registry = ToolRegistry()
+	register_city_tools(registry, db=db, job_id=uuid4(), agent_id=None)
+	return registry.list_tools()
+
+
+@router.post("/jobs/{job_id}/tools/execute")
+async def execute_job_tools(
+	job_id: str,
+	body: ExecuteToolsRequest,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	service = CityService(db)
+	try:
+		jid = UUID(job_id)
+	except ValueError as exc:
+		raise HTTPException(status_code=400, detail="Invalid job_id") from exc
+
+	calls = list(body.calls)
+	if body.text:
+		calls.extend(parse_tool_calls(body.text))
+	if not calls:
+		raise HTTPException(status_code=400, detail="No tool calls provided")
+
+	try:
+		return await service.execute_tool_calls(
+			jid,
+			calls,
+			agent_id=UUID(body.agent_id) if body.agent_id else None,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		status = 404 if "not found" in str(exc).lower() else 400
+		raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/invoke")
+async def invoke_job(
+	job_id: str,
+	body: InvokeJobRequest,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""
+	Phase 2 job invoke: run structured tool calls on the job commons.
+
+	Pass ``calls`` and/or ``text`` containing JSON / TOOL_CALL lines.
+	When ``complete`` is true and all calls succeed, marks the job completed.
+	"""
+	service = CityService(db)
+	try:
+		jid = UUID(job_id)
+	except ValueError as exc:
+		raise HTTPException(status_code=400, detail="Invalid job_id") from exc
+
+	calls = list(body.calls)
+	if body.text:
+		calls.extend(parse_tool_calls(body.text))
+	if not calls:
+		raise HTTPException(status_code=400, detail="No tool calls provided")
+
+	try:
+		result = await service.execute_tool_calls(
+			jid,
+			calls,
+			agent_id=UUID(body.agent_id) if body.agent_id else None,
+		)
+		all_ok = all(item.get("ok", False) for item in result.get("tool_results", []))
+		if body.complete:
+			await service.set_job_status(
+				jid,
+				status=CityJobStatus.COMPLETED.value if all_ok else CityJobStatus.FAILED.value,
+				result_summary="tool invoke completed" if all_ok else "tool invoke had failures",
+				result={"tool_results": result.get("tool_results", [])},
+			)
+		job = await service.get_job(jid)
+		return {"invoke": result, "job": job}
+	except ValueError as exc:
+		await db.rollback()
+		status = 404 if "not found" in str(exc).lower() else 400
+		raise HTTPException(status_code=status, detail=str(exc)) from exc

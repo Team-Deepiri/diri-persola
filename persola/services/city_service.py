@@ -477,6 +477,15 @@ class CityService:
 		rows = await self.artifacts.list_for_job(job_id, limit=limit)
 		return [self._serialize_artifact(r) for r in rows]
 
+	async def get_artifact_by_path(self, job_id: UUID, path: str) -> dict[str, Any] | None:
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		row = await self.artifacts.get_latest_by_path(job_id, path)
+		if row is None:
+			return None
+		return self._serialize_artifact(row)
+
 	async def list_runs(self, job_id: UUID, limit: int = 200) -> list[dict[str, Any]]:
 		job = await self.jobs.get(job_id)
 		if job is None:
@@ -605,3 +614,96 @@ class CityService:
 			await self.db.commit()
 			await self.db.refresh(row)
 		return self._serialize_run(row)
+
+	async def set_job_status(
+		self,
+		job_id: UUID,
+		*,
+		status: str,
+		result_summary: str | None = None,
+		result: dict[str, Any] | None = None,
+	) -> dict[str, Any]:
+		from datetime import datetime
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		if status not in {s.value for s in CityJobStatus}:
+			raise ValueError(f"Invalid status: {status}")
+		job.status = status
+		if result_summary is not None:
+			job.result_summary = result_summary
+		if result is not None:
+			job.result = result
+		if status in {CityJobStatus.COMPLETED.value, CityJobStatus.FAILED.value}:
+			job.completed_at = datetime.utcnow()
+			await self.emit_event(
+				event_type="job.completed",
+				family_id=job.family_id,
+				job_id=job.id,
+				payload={
+					"job_id": str(job.id),
+					"family_id": str(job.family_id),
+					"status": status,
+					"result_summary": result_summary,
+				},
+			)
+		await self.db.commit()
+		await self.db.refresh(job)
+		return self._serialize_job(job)
+
+	async def execute_tool_calls(
+		self,
+		job_id: UUID,
+		calls: list[dict[str, Any]],
+		*,
+		agent_id: UUID | None = None,
+		session_id: str | None = None,
+	) -> dict[str, Any]:
+		"""Run structured tool calls against the city commons registry."""
+		from ..orchestration.city_tools import build_city_registry
+		from ..orchestration.tool_calls import parse_tool_calls
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+
+		if job.status == CityJobStatus.PENDING.value:
+			job.status = CityJobStatus.RUNNING.value
+			await self.db.flush()
+
+		registry = await build_city_registry(
+			session_id or f"city-job-{job_id}",
+			db=self.db,
+			job_id=job_id,
+			agent_id=agent_id,
+		)
+
+		normalized: list[dict[str, Any]] = []
+		for call in calls:
+			if isinstance(call, str):
+				normalized.extend(parse_tool_calls(call))
+			elif isinstance(call, dict):
+				name = call.get("name")
+				if not name:
+					continue
+				args = call.get("args") or call.get("arguments") or {}
+				normalized.append({"name": str(name), "args": args if isinstance(args, dict) else {}})
+
+		results: list[dict[str, Any]] = []
+		for call in normalized:
+			name = call["name"]
+			args = call.get("args") or {}
+			try:
+				result = await registry.run(name, **args)
+				results.append({"name": name, "args": args, "result": result, "ok": not bool(result.get("error"))})
+			except Exception as exc:  # noqa: BLE001 — surface tool failures to caller
+				results.append({"name": name, "args": args, "error": str(exc), "ok": False})
+
+		await self.db.commit()
+		fresh = await self.jobs.get(job_id)
+		return {
+			"job_id": str(job_id),
+			"status": fresh.status if fresh else job.status,
+			"tool_results": results,
+		}
