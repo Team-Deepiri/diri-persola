@@ -133,6 +133,47 @@ type MemorialPayload = {
   };
 };
 
+type GenerationsPayload = {
+  generations: Array<{
+    generation: number;
+    living: number;
+    deceased: number;
+    avg_growth: number;
+    avg_structured_thinking: number;
+    productivity_index: number;
+  }>;
+  legacy_edges: number;
+  goal_bank: string[];
+  dream_bank: string[];
+  families: Array<{
+    family_id: string;
+    name: string;
+    district: string;
+    cohesion: number;
+    efficiency: number;
+    living: number;
+    deceased: number;
+    goals: string[];
+    dreams: string[];
+  }>;
+  last_life_proof: {
+    died: number;
+    born: number;
+    efficiency_before: number;
+    efficiency_after: number;
+    efficiency_preserved: boolean;
+  } | null;
+  continuity_ok: boolean;
+  thesis: string;
+};
+
+type ChroniclePayload = {
+  events: CityEvent[];
+  count: number;
+  eras: Record<string, number>;
+  memorial_count: number;
+};
+
 type AwakenResult = {
   mode: string;
   families: number;
@@ -198,6 +239,9 @@ export function CityView() {
   const [snapshot, setSnapshot] = useState<CitySnapshot | null>(null);
   const [ecosystem, setEcosystem] = useState<EcosystemPayload | null>(null);
   const [memorial, setMemorial] = useState<MemorialPayload | null>(null);
+  const [generations, setGenerations] = useState<GenerationsPayload | null>(null);
+  const [chronicle, setChronicle] = useState<ChroniclePayload | null>(null);
+  const [eraOpen, setEraOpen] = useState(true);
   const [cityMode, setCityMode] = useState(true);
   const [job, setJob] = useState<Job | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -263,14 +307,20 @@ export function CityView() {
   }, []);
 
   const loadSnapshot = useCallback(async () => {
-    const [{ data }, eco, mem] = await Promise.all([
+    const [{ data }, eco, mem, gens, chron] = await Promise.all([
       api.get<CitySnapshot>('/city/snapshot'),
       api.get<EcosystemPayload>('/city/ecosystem').catch(() => ({ data: null })),
       api.get<MemorialPayload>('/city/memorial', { params: { limit: 40 } }).catch(() => ({ data: null })),
+      api.get<GenerationsPayload>('/city/generations').catch(() => ({ data: null })),
+      api.get<ChroniclePayload>('/city/chronicle', { params: { life_only: true, limit: 40 } }).catch(() => ({
+        data: null,
+      })),
     ]);
     setSnapshot(data);
     if (eco.data) setEcosystem(eco.data);
     if (mem.data) setMemorial(mem.data);
+    if (gens.data) setGenerations(gens.data);
+    if (chron.data) setChronicle(chron.data);
     if (data.events?.length) {
       setEvents((prev) => {
         const seen = new Set(prev.map((e) => e.id).filter(Boolean));
@@ -879,6 +929,9 @@ export function CityView() {
           <button type="button" className="btn ghost" onClick={onLifeTick} disabled={loading}>
             Generations
           </button>
+          <button type="button" className="btn ghost" onClick={() => setEraOpen((v) => !v)} disabled={loading}>
+            {eraOpen ? 'Hide era' : 'Era chamber'}
+          </button>
           <button type="button" className="btn ghost" onClick={onConduct} disabled={loading}>
             Conduct
           </button>
@@ -935,6 +988,111 @@ export function CityView() {
           </span>
         </div>
       </div>
+
+      {eraOpen && (
+        <section className="era-chamber" aria-label="Era chamber">
+          <div className="era-head">
+            <div>
+              <h2>Era chamber</h2>
+              <p className="city-sub">
+                {generations?.thesis ??
+                  'Families cohere by personality. Death is natural — legacy keeps the city efficient.'}
+              </p>
+            </div>
+            <div className={`continuity-pill${generations?.continuity_ok ? ' ok' : ' warn'}`}>
+              {generations?.continuity_ok ? 'continuity held' : 'continuity at risk'}
+            </div>
+          </div>
+
+          <div className="era-grid">
+            <div className="era-card">
+              <h3>Generations</h3>
+              {(generations?.generations ?? []).length === 0 && (
+                <p className="muted">Awaken or seed, then run Generations / Cinema.</p>
+              )}
+              {(generations?.generations ?? []).map((g) => (
+                <div key={g.generation} className="gen-row">
+                  <div className="gen-label">
+                    G{g.generation} · {g.living} living · {g.deceased}†
+                  </div>
+                  <div className="bar-track">
+                    <div
+                      className="bar-fill gen-fill"
+                      style={{ width: `${Math.min(100, Math.round(g.productivity_index * 50))}%` }}
+                    />
+                  </div>
+                  <div className="gen-meta">
+                    prod {g.productivity_index.toFixed(2)} · think{' '}
+                    {(g.avg_structured_thinking * 100).toFixed(0)}% · growth{' '}
+                    {(g.avg_growth * 100).toFixed(0)}%
+                  </div>
+                </div>
+              ))}
+              {generations?.last_life_proof && (
+                <p className="proof-line">
+                  Last tick: {generations.last_life_proof.died}† → {generations.last_life_proof.born}{' '}
+                  heirs · eff {generations.last_life_proof.efficiency_before}→
+                  {generations.last_life_proof.efficiency_after}
+                  {generations.last_life_proof.efficiency_preserved ? ' · preserved' : ''}
+                </p>
+              )}
+            </div>
+
+            <div className="era-card">
+              <h3>Family cohesion</h3>
+              {(generations?.families ?? ecosystem?.ecosystems ?? []).slice(0, 6).map((f) => (
+                <div key={f.family_id} className="cohesion-row">
+                  <div className="cohesion-top">
+                    <strong>{f.name}</strong>
+                    <span className="muted">{f.district}</span>
+                  </div>
+                  <div className="bar-track">
+                    <div
+                      className="bar-fill cohesion-fill"
+                      style={{ width: `${Math.round((f.cohesion ?? 0) * 100)}%` }}
+                    />
+                  </div>
+                  <div className="gen-meta">
+                    cohesion {((f.cohesion ?? 0) * 100).toFixed(0)}% · eff {(f.efficiency ?? 0).toFixed(2)} ·{' '}
+                    {f.living} living
+                  </div>
+                  {!!f.goals?.length && (
+                    <div className="goal-chip">{f.goals.slice(0, 2).join(' · ')}</div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="era-card">
+              <h3>Chronicle</h3>
+              <ul className="era-feed">
+                {(chronicle?.events ?? [])
+                  .slice()
+                  .reverse()
+                  .slice(0, 10)
+                  .map((e, idx) => (
+                    <li key={e.id ?? `${e.event_type}-${idx}`} className={`ev-${e.event_type.replace(/\./g, '-')}`}>
+                      <span className="event-type">{e.event_type}</span>
+                      <span className="muted">
+                        {e.created_at ? new Date(e.created_at).toLocaleTimeString() : ''}
+                      </span>
+                    </li>
+                  ))}
+                {(!chronicle || chronicle.events.length === 0) && (
+                  <li className="muted">Life events land here after pulse / generations.</li>
+                )}
+              </ul>
+              <div className="dream-bank">
+                {(generations?.dream_bank ?? []).slice(0, 3).map((d) => (
+                  <span key={d} className="dream-chip">
+                    {d}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       <div className="district-filters">
         {(['build', 'viz', 'research', 'ops'] as const).map((d) => (

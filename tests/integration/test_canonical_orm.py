@@ -46,9 +46,10 @@ class TestAustinPackLife:
 		await service.create_family(name="AustinLife", parent_name="Lead", policy={"max_age_ticks": 1})
 		await service.life_tick(force_age=1)
 		pack = await service.export_austin_pack(event_limit=50, include_artifacts=False)
-		assert pack["pack_version"] == "1.2"
+		assert pack["pack_version"] == "1.3"
 		assert "ecosystems" in pack
 		assert "chronicle" in pack
+		assert "generations" in pack
 		assert pack["vitals"].get("living") is not None
 		assert any(n.get("life_status") for n in pack["graph"]["nodes"])
 		kinds = {e.get("kind") for e in pack["graph"]["edges"]}

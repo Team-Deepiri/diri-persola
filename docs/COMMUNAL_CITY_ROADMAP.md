@@ -1,6 +1,6 @@
 # Persola Communal City — Full Implementation Roadmap
 
-**Status:** Implemented (Phases 0–12)  
+**Status:** Implemented (Phases 0–13)  
 **Depends on:** [COMMUNAL_CITY_DESIGN.md](./COMMUNAL_CITY_DESIGN.md)  
 **Baseline:** Persola personality engine + team orchestration (LangGraph, Team Workbench) already in repo
 
@@ -36,6 +36,8 @@ Phase 10 City conductor — LLM team-invoke across families
 Phase 11 Memorial + prod ops — era roll, life metrics, Cyrex living sync, ASGI workers
     │
 Phase 12 Chronicle + Austin stream — era timeline, life SSE filters, city health, compose fix
+    │
+Phase 13 Era chamber — generation proof, cohesion UI, goals/dreams policy
 ```
 
 ---
@@ -376,6 +378,26 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8i. Phase 13 — Era chamber + generation proof
+
+**Goal:** Make the thesis visible and measurable — death is natural; productivity survives generations; families cohere by personality/goals/dreams.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `GET /api/v1/city/generations` | Cohorts, productivity_index, last_life_proof, continuity_ok |
+| `PATCH /families/{id}/policy` | `max_age_ticks`, `cohesion_min` |
+| `PATCH /members/{id}/life` | goals, dreams, structured_thinking |
+| Austin pack **v1.3** | Includes `generations` |
+| UI **Era chamber** | Generation bars, cohesion cards, chronicle, continuity pill |
+
+### 8i.1 Exit criteria
+
+- After life tick, generations report has legacy_edges ≥ 1 and last_life_proof.efficiency_preserved.
+- Policy patch updates family.policy and living member max_age_ticks.
+- Era chamber renders without breaking City view.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -437,14 +459,14 @@ docs/
 - [x] **P10** City conductor — LLM team-invoke / tool fallback across families
 - [x] **P11** Memorial + life metrics + Cyrex living sync + prod ASGI
 - [x] **P12** Chronicle + city-wide life SSE + health + compose fix
+- [x] **P13** Era chamber + generation continuity proof
 
 ---
 
 ## 13. Immediate next implementation step
 
-Phases 0–12 are on the communal-city branch. Remaining:
+Phases 0–13 are on the communal-city branch. Remaining:
 
-1. Staging: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build` with `PERSOLA_AUTO_MIGRATE=1`.
-2. Austin: consume pack **v1.2** (`chronicle`) and SSE `?city_wide=true&types=member.died,legacy.passed,life.aged`.
-3. Point `CYREX_URL` / `CYREX_API_KEY` at staging; `POST /city/cyrex/sync` dry_run then live.
-4. Optional: remove deprecated `persola/db/tables.py` / `config.py`.
+1. Staging compose prod + Austin wiring to pack **v1.3** / generations / life SSE.
+2. Real Cyrex keys: dry_run then `POST /city/cyrex/sync`.
+3. Optional: operator edits for goals/dreams in inspect panel; remove deprecated `tables.py`.

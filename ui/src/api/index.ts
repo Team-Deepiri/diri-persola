@@ -106,6 +106,13 @@ export const cityApi = {
   chronicle: (params: { limit?: number; life_only?: boolean; family_id?: string } = {}) =>
     api.get('/city/chronicle', { params }),
   cityHealth: () => api.get('/city/health'),
+  generations: () => api.get('/city/generations'),
+  patchFamilyPolicy: (familyId: string, body: { max_age_ticks?: number; cohesion_min?: number; notes?: string }) =>
+    api.patch(`/city/families/${familyId}/policy`, body),
+  patchMemberLife: (
+    memberId: string,
+    body: { goals?: string[]; dreams?: string[]; structured_thinking?: number },
+  ) => api.patch(`/city/members/${memberId}/life`, body),
   lifeTick: (body: { max_families?: number; force_age?: number } = {}) =>
     api.post('/city/life/tick', body),
   cyrexSyncCity: (body: { max_families?: number; living_only?: boolean; dry_run?: boolean } = {}) =>

@@ -73,6 +73,8 @@ def _clamp_knob(value: float) -> float:
 
 # Phase 8 — process-local last pulse vitals for GET /heartbeat
 LAST_CITY_HEARTBEAT: dict[str, Any] = {}
+# Phase 13 — last life-tick proof that death preserved efficiency
+LAST_LIFE_PROOF: dict[str, Any] = {}
 
 
 class CityService:
@@ -724,6 +726,165 @@ class CityService:
 			"queue_depth": getattr(CITY_WORKER_POOL, "queue_depth", 0),
 			"status": "alive" if living > 0 else "dormant",
 		}
+
+	async def generation_report(self) -> dict[str, Any]:
+		"""
+		Phase 13 — prove generational continuity.
+
+		Cohorts by generation with growth/thinking; last life-tick efficiency proof;
+		family cohesion from ecosystems.
+		"""
+		summaries = await self.list_families()
+		cohorts: dict[int, dict[str, Any]] = {}
+		legacy_edges = 0
+		goal_bank: list[str] = []
+		dream_bank: list[str] = []
+
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			for m in detail.get("members") or []:
+				gen = int(m.get("generation") or 0)
+				bucket = cohorts.setdefault(
+					gen,
+					{
+						"generation": gen,
+						"living": 0,
+						"deceased": 0,
+						"growth_sum": 0.0,
+						"thinking_sum": 0.0,
+						"members": 0,
+					},
+				)
+				bucket["members"] += 1
+				if (m.get("life_status") or "alive") == FamilyMemberLifeStatus.DECEASED.value:
+					bucket["deceased"] += 1
+				else:
+					bucket["living"] += 1
+					bucket["growth_sum"] += float(m.get("growth") or 0.0)
+					bucket["thinking_sum"] += float(m.get("structured_thinking") or 0.5)
+					for g in m.get("goals") or []:
+						if g not in goal_bank:
+							goal_bank.append(g)
+					for d in m.get("dreams") or []:
+						if d not in dream_bank:
+							dream_bank.append(d)
+				if m.get("successor_of_id"):
+					legacy_edges += 1
+
+		generations: list[dict[str, Any]] = []
+		for gen in sorted(cohorts.keys()):
+			b = cohorts[gen]
+			living = b["living"]
+			generations.append(
+				{
+					"generation": gen,
+					"living": living,
+					"deceased": b["deceased"],
+					"members": b["members"],
+					"avg_growth": round(b["growth_sum"] / living, 4) if living else 0.0,
+					"avg_structured_thinking": round(b["thinking_sum"] / living, 4) if living else 0.0,
+					# Productivity proxy: thinking × (1 + growth) among the living
+					"productivity_index": round(
+						(b["thinking_sum"] / living) * (1.0 + (b["growth_sum"] / living)) if living else 0.0,
+						4,
+					),
+				}
+			)
+
+		eco = await self.city_ecosystem(event_limit=10)
+		families = [
+			{
+				"family_id": e["family_id"],
+				"name": e["name"],
+				"district": e["district"],
+				"cohesion": e["cohesion"],
+				"efficiency": e["efficiency"],
+				"living": e["living"],
+				"deceased": e["deceased"],
+				"generation_max": e["generation_max"],
+				"goals": e.get("goals") or [],
+				"dreams": e.get("dreams") or [],
+			}
+			for e in eco.get("ecosystems") or []
+		]
+
+		# Continuity: later generations should not collapse productivity_index vs founders
+		prod = [g["productivity_index"] for g in generations if g["living"] > 0]
+		continuity_ok = True
+		if len(prod) >= 2 and prod[0] > 0:
+			continuity_ok = prod[-1] >= prod[0] * 0.85
+
+		return {
+			"generations": generations,
+			"legacy_edges": legacy_edges,
+			"goal_bank": goal_bank[:24],
+			"dream_bank": dream_bank[:16],
+			"families": families,
+			"city": eco.get("city") or {},
+			"last_life_proof": dict(LAST_LIFE_PROOF) if LAST_LIFE_PROOF else None,
+			"continuity_ok": continuity_ok,
+			"thesis": (
+				"Death is natural; efficiency and productivity pass through generations "
+				"via inherited goals, dreams, tools, and personality drift."
+			),
+		}
+
+	async def update_family_policy(self, family_id: UUID, policy_patch: dict[str, Any]) -> dict[str, Any]:
+		"""Merge policy keys (max_age_ticks, cohesion_min, …)."""
+		family = await self.families.get(family_id)
+		if family is None:
+			raise ValueError("Family not found")
+		merged = dict(family.policy or {})
+		allowed = {"max_age_ticks", "cohesion_min", "district_bias", "notes"}
+		for k, v in policy_patch.items():
+			if k not in allowed:
+				continue
+			if k == "max_age_ticks":
+				merged[k] = max(1, min(200, int(v)))
+			elif k == "cohesion_min":
+				merged[k] = max(0.0, min(1.0, float(v)))
+			else:
+				merged[k] = v
+		family.policy = merged
+		# Apply max_age to living members when set
+		if "max_age_ticks" in merged:
+			members = await self.members.list_for_family(family_id)
+			for m in members:
+				if m.life_status == FamilyMemberLifeStatus.ALIVE.value:
+					m.max_age_ticks = int(merged["max_age_ticks"])
+		await self.db.commit()
+		detail = await self.get_family(family_id)
+		assert detail is not None
+		return detail
+
+	async def update_member_life(
+		self,
+		member_id: UUID,
+		*,
+		goals: list[str] | None = None,
+		dreams: list[str] | None = None,
+		structured_thinking: float | None = None,
+	) -> dict[str, Any]:
+		member = await self.members.get(member_id)
+		if member is None:
+			raise ValueError("Member not found")
+		if goals is not None:
+			member.goals = [str(g)[:200] for g in goals][:12]
+		if dreams is not None:
+			member.dreams = [str(d)[:200] for d in dreams][:8]
+		if structured_thinking is not None:
+			member.structured_thinking = max(0.0, min(1.0, float(structured_thinking)))
+		await self.db.commit()
+		# Reload with agent
+		family = await self.families.get_with_members(member.family_id)
+		if family is None:
+			raise ValueError("Family not found")
+		row = next((m for m in family.members if m.id == member_id), None)
+		if row is None:
+			raise ValueError("Member missing after update")
+		return self._serialize_member(row)
 
 	# ── Commons helpers for Phase 2 (usable now for persistence tests) ──
 
@@ -1837,7 +1998,7 @@ class CityService:
 			record_city_succession(born)
 		except Exception:
 			pass
-		return {
+		proof = {
 			"aged": aged,
 			"died": died,
 			"born": born,
@@ -1845,6 +2006,12 @@ class CityService:
 			"efficiency_before": avg_b,
 			"efficiency_after": avg_a,
 			"efficiency_preserved": avg_a >= avg_b * 0.95 if avg_b > 0 else True,
+			"at": datetime.utcnow().isoformat(),
+		}
+		LAST_LIFE_PROOF.clear()
+		LAST_LIFE_PROOF.update(proof)
+		return {
+			**proof,
 			"ecosystem": await self.city_ecosystem(event_limit=20),
 		}
 
@@ -2143,9 +2310,10 @@ class CityService:
 
 		eco = await self.city_ecosystem(event_limit=min(40, event_limit))
 		chronicle = await self.city_chronicle(limit=min(60, event_limit), life_only=True)
+		generations = await self.generation_report()
 
 		return {
-			"pack_version": "1.2",
+			"pack_version": "1.3",
 			"contract": "docs/CITY_EVENTS.md",
 			"generated_at": datetime.utcnow().isoformat(),
 			"vitals": {
@@ -2158,10 +2326,12 @@ class CityService:
 				"deceased": (eco.get("city") or {}).get("deceased"),
 				"generation_max": (eco.get("city") or {}).get("generation_max"),
 				"avg_efficiency": (eco.get("city") or {}).get("avg_efficiency"),
+				"continuity_ok": generations.get("continuity_ok"),
 			},
 			"graph": {"nodes": graph_nodes, "edges": graph_edges},
 			"ecosystems": eco.get("ecosystems") or [],
 			"chronicle": chronicle,
+			"generations": generations,
 			"events": snap.get("events") or [],
 			"artifacts": artifacts_sample,
 			"heartbeat": heartbeat,
@@ -2173,6 +2343,7 @@ class CityService:
 				"snapshot": "GET /api/v1/city/snapshot",
 				"ecosystem": "GET /api/v1/city/ecosystem",
 				"chronicle": "GET /api/v1/city/chronicle?life_only=true",
+				"generations": "GET /api/v1/city/generations",
 				"memorial": "GET /api/v1/city/memorial",
 				"life_tick": "POST /api/v1/city/life/tick",
 				"export": "GET /api/v1/city/export/austin",

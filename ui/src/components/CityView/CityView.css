@@ -639,3 +639,154 @@
   transform-box: fill-box;
   transform-origin: center;
 }
+
+/* Phase 13 — Era chamber */
+.era-chamber {
+  margin: 0 0 20px;
+  padding: 18px 20px 20px;
+  border-radius: 16px;
+  background:
+    radial-gradient(120% 80% at 10% 0%, rgba(15, 118, 110, 0.12), transparent 55%),
+    radial-gradient(90% 70% at 90% 10%, rgba(124, 58, 237, 0.1), transparent 50%),
+    linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+  border: 1px solid #dbe3f0;
+}
+
+.era-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.era-head h2 {
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+  letter-spacing: -0.02em;
+}
+
+.continuity-pill {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #64748b;
+}
+
+.continuity-pill.ok {
+  border-color: #99f6e4;
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.continuity-pill.warn {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.era-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 960px) {
+  .era-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.era-card {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  min-height: 160px;
+}
+
+.era-card h3 {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+}
+
+.gen-row,
+.cohesion-row {
+  margin-bottom: 10px;
+}
+
+.gen-label,
+.cohesion-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.85rem;
+  margin-bottom: 4px;
+}
+
+.gen-meta {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: #64748b;
+}
+
+.gen-fill {
+  background: linear-gradient(90deg, #0f766e, #4338ca);
+}
+
+.cohesion-fill {
+  background: linear-gradient(90deg, #0369a1, #0f766e);
+}
+
+.goal-chip,
+.dream-chip {
+  display: inline-block;
+  margin-top: 6px;
+  margin-right: 6px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 0.7rem;
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.dream-bank {
+  margin-top: 10px;
+}
+
+.proof-line {
+  margin: 10px 0 0;
+  font-size: 0.78rem;
+  color: #0f766e;
+}
+
+.era-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.era-feed li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 0.78rem;
+}
+
+.era-feed .event-type {
+  font-weight: 600;
+  color: #0f172a;
+}

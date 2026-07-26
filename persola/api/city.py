@@ -960,6 +960,63 @@ async def city_health(db: AsyncSession = Depends(get_db)):
 	return await service.city_health()
 
 
+@router.get("/generations")
+async def city_generations(db: AsyncSession = Depends(get_db)):
+	"""Phase 13 — generation cohorts + efficiency continuity proof."""
+	service = CityService(db)
+	return await service.generation_report()
+
+
+class FamilyPolicyPatch(BaseModel):
+	max_age_ticks: Optional[int] = Field(default=None, ge=1, le=200)
+	cohesion_min: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+	notes: Optional[str] = None
+
+
+@router.patch("/families/{family_id}/policy")
+async def patch_family_policy(
+	family_id: str,
+	body: FamilyPolicyPatch,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Phase 13 — tune lifespan / cohesion policy for a family ecosystem."""
+	service = CityService(db)
+	patch = body.model_dump(exclude_none=True)
+	try:
+		return await service.update_family_policy(UUID(family_id), patch)
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+class MemberLifePatch(BaseModel):
+	goals: Optional[list[str]] = None
+	dreams: Optional[list[str]] = None
+	structured_thinking: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+
+
+@router.patch("/members/{member_id}/life")
+async def patch_member_life(
+	member_id: str,
+	body: MemberLifePatch,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Phase 13 — edit goals, dreams, structured thinking for a living member."""
+	service = CityService(db)
+	try:
+		return await service.update_member_life(
+			UUID(member_id),
+			goals=body.goals,
+			dreams=body.dreams,
+			structured_thinking=body.structured_thinking,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/cyrex/sync")
 async def city_cyrex_sync(
 	body: CityCyrexSyncRequest | None = None,
