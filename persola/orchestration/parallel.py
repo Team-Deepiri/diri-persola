@@ -62,20 +62,30 @@ class ParallelToolExecutor:
         registry: Any,
         calls: List[Dict[str, Any]],
     ) -> List[ToolCallResult]:
-        tasks = []
-        for call in calls:
+        """Run a batch; non-``parallel_safe`` tools are serialized."""
+        results: List[ToolCallResult | None] = [None] * len(calls)
+        parallel_tasks: List[asyncio.Task] = []
+        parallel_idx: List[int] = []
+
+        for i, call in enumerate(calls):
             name = call["name"]
             args = call.get("args", {})
             spec = registry.get(name)
             if spec is None:
-                tasks.append(
-                    asyncio.create_task(
-                        self._immediate_error(name, f"unknown tool: {name}")
-                    )
-                )
+                results[i] = ToolCallResult(name=name, success=False, error=f"unknown tool: {name}")
                 continue
-            tasks.append(asyncio.create_task(self.run_one(name, spec.handler, args)))
-        return list(await asyncio.gather(*tasks))
+            if not getattr(spec, "parallel_safe", True):
+                results[i] = await self.run_one(name, spec.handler, args)
+            else:
+                parallel_idx.append(i)
+                parallel_tasks.append(asyncio.create_task(self.run_one(name, spec.handler, args)))
+
+        if parallel_tasks:
+            parallel_results = await asyncio.gather(*parallel_tasks)
+            for i, res in zip(parallel_idx, parallel_results):
+                results[i] = res
+
+        return [r if r is not None else ToolCallResult(name="unknown", success=False, error="missing") for r in results]
 
     async def _immediate_error(self, name: str, error: str) -> ToolCallResult:
         return ToolCallResult(name=name, success=False, error=error)

@@ -8,7 +8,7 @@ from uuid import UUID
 import pytest
 
 from persola.orchestration.city_scale import ConcurrencyGovernor, ModelTier, ScaleConfig, shard_for_district
-from persola.orchestration.city_worker import CITY_WORKER_POOL, CityWorkItem, CityWorkerPool
+from persola.orchestration.city_worker import CITY_WORKER_POOL
 from persola.services.city_service import CityService
 
 pytestmark = pytest.mark.anyio
@@ -74,43 +74,38 @@ class TestScaleProbe:
 
 
 class TestWorkerPool:
-	async def test_enqueue_and_complete(self, db_session, monkeypatch):
-		# Use a private pool so we don't fight the global singleton across tests.
-		pool = CityWorkerPool(ScaleConfig(worker_count=2, max_global_concurrent=4, max_per_family=4))
-		await pool.start()
+	async def test_enqueue_and_complete(self, db_session):
+		from contextlib import asynccontextmanager
+
 		service = CityService(db_session)
 		family = await service.create_family(name="WorkerFam", parent_name="P")
 		job = await service.start_job(family_id=UUID(family["id"]), goal="enqueue")
 		agent_id = UUID(family["members"][0]["agent_id"])
 
-		# Point worker at the same in-memory session factory used by tests:
-		# execute_tool_calls opens AsyncSessionLocal which is the env DB.
-		# For unit isolation, call service path directly then mark item complete.
-		item = CityWorkItem(
-			id="work-test-1",
-			job_id=UUID(job["id"]),
-			family_id=UUID(family["id"]),
-			district="build",
-			calls=[
-				{"name": "workspace_write", "args": {"path": "w.py", "content": "print(1)\n"}},
-				{"name": "run_python", "args": {"path": "w.py"}},
-			],
-			agent_id=agent_id,
-		)
-		# Bypass separate DB: run execute inline, then enqueue no-op style
-		result = await service.execute_tool_calls(item.job_id, item.calls, agent_id=agent_id)
-		assert any(t.get("ok") for t in result["tool_results"])
+		@asynccontextmanager
+		async def _factory():
+			yield db_session
 
-		await pool.enqueue(item)
-		# Wait briefly for worker — may fail on separate memory DB; accept queued→running transition
-		for _ in range(50):
-			current = pool.get(item.id)
-			if current and current.status in {"completed", "failed"}:
-				break
-			await asyncio.sleep(0.05)
-		await pool.stop()
-		# Item was at least accepted by the pool
-		assert item.id in pool._items
+		CITY_WORKER_POOL.set_session_factory(_factory)
+		try:
+			if CITY_WORKER_POOL._started:
+				await CITY_WORKER_POOL.stop()
+			result = await service.enqueue_job_tools(
+				UUID(job["id"]),
+				[
+					{"name": "workspace_write", "args": {"path": "w.py", "content": "print(1)\n"}},
+					{"name": "run_python", "args": {"path": "w.py"}},
+				],
+				agent_id=agent_id,
+				wait=True,
+			)
+			assert result["status"] == "completed"
+			assert result["result"] is not None
+			runs = await service.list_runs(UUID(job["id"]))
+			assert any(r["tool"] == "run_python" and r["status"] == "succeeded" for r in runs)
+		finally:
+			await CITY_WORKER_POOL.stop()
+			CITY_WORKER_POOL.set_session_factory(None)
 
 
 class TestScaleAPI:

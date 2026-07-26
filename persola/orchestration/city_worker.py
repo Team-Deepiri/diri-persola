@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, AsyncContextManager, Callable
 from uuid import UUID, uuid4
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from .city_scale import DEFAULT_SCALE_CONFIG, GLOBAL_GOVERNOR, ScaleConfig, ConcurrencyGovernor
+
+SessionFactory = Callable[[], AsyncContextManager[AsyncSession]]
 
 
 @dataclass
@@ -23,6 +27,7 @@ class CityWorkItem:
 	result: dict[str, Any] | None = None
 	error: str | None = None
 	status: str = "queued"  # queued | running | completed | failed
+	done: asyncio.Event = field(default_factory=asyncio.Event)
 
 
 class CityWorkerPool:
@@ -32,9 +37,11 @@ class CityWorkerPool:
 		self,
 		config: ScaleConfig | None = None,
 		governor: ConcurrencyGovernor | None = None,
+		session_factory: SessionFactory | None = None,
 	) -> None:
 		self.config = config or DEFAULT_SCALE_CONFIG
 		self.governor = governor or GLOBAL_GOVERNOR
+		self._session_factory = session_factory
 		self._queue: asyncio.Queue[CityWorkItem | None] = asyncio.Queue(
 			maxsize=self.config.queue_maxsize
 		)
@@ -43,7 +50,12 @@ class CityWorkerPool:
 		self._items: dict[str, CityWorkItem] = {}
 		self.completed = 0
 		self.failed = 0
+		self._in_flight = 0
 		self._lock = asyncio.Lock()
+
+	def set_session_factory(self, factory: SessionFactory | None) -> None:
+		"""Inject a session factory (tests) or reset to AsyncSessionLocal (None)."""
+		self._session_factory = factory
 
 	@property
 	def queue_depth(self) -> int:
@@ -51,7 +63,7 @@ class CityWorkerPool:
 
 	@property
 	def busy_workers(self) -> int:
-		return sum(1 for t in self._workers if not t.done() and self.governor.active_global >= 0)
+		return self._in_flight
 
 	async def start(self) -> None:
 		if self._started:
@@ -81,6 +93,11 @@ class CityWorkerPool:
 			pass
 		return item
 
+	async def enqueue_and_wait(self, item: CityWorkItem, *, timeout: float = 60.0) -> CityWorkItem:
+		await self.enqueue(item)
+		await asyncio.wait_for(item.done.wait(), timeout=timeout)
+		return item
+
 	def get(self, work_id: str) -> CityWorkItem | None:
 		return self._items.get(work_id)
 
@@ -89,14 +106,21 @@ class CityWorkerPool:
 			"started": self._started,
 			"worker_count": len(self._workers),
 			"queue_depth": self.queue_depth,
+			"busy_workers": self._in_flight,
 			"completed": self.completed,
 			"failed": self.failed,
 			"tracked_items": len(self._items),
 			"governor": self.governor.snapshot(),
 		}
 
-	async def _worker_loop(self, worker_id: int) -> None:
+	def _open_session(self):
+		if self._session_factory is not None:
+			return self._session_factory()
 		from ..db.database import AsyncSessionLocal
+
+		return AsyncSessionLocal()
+
+	async def _worker_loop(self, worker_id: int) -> None:
 		from ..metrics import (
 			observe_city_job_duration,
 			record_city_tool_run,
@@ -110,15 +134,21 @@ class CityWorkerPool:
 				if item is None:
 					return
 				item.status = "running"
+				self._in_flight += 1
 				started = time.perf_counter()
-				await self.governor.acquire(family_id=str(item.family_id), district=item.district)
+				await self.governor.acquire(
+					family_id=str(item.family_id),
+					district=item.district,
+					job_id=str(item.job_id),
+				)
 				try:
-					async with AsyncSessionLocal() as session:
+					async with self._open_session() as session:
 						service = CityService(session)
 						result = await service.execute_tool_calls(
 							item.job_id,
 							item.calls,
 							agent_id=item.agent_id,
+							governed=False,  # already holding slots
 						)
 						item.result = result
 						item.status = "completed"
@@ -134,9 +164,15 @@ class CityWorkerPool:
 					self.failed += 1
 					record_city_tool_run("batch", "failed")
 				finally:
-					self.governor.release(family_id=str(item.family_id), district=item.district)
+					self.governor.release(
+						family_id=str(item.family_id),
+						district=item.district,
+						job_id=str(item.job_id),
+					)
 					observe_city_job_duration(item.district, time.perf_counter() - started)
 					set_city_queue_depth(self.queue_depth)
+					self._in_flight = max(0, self._in_flight - 1)
+					item.done.set()
 			finally:
 				self._queue.task_done()
 
@@ -151,6 +187,8 @@ async def enqueue_city_tools(
 	district: str,
 	calls: list[dict[str, Any]],
 	agent_id: UUID | None = None,
+	wait: bool = False,
+	timeout: float = 60.0,
 ) -> CityWorkItem:
 	item = CityWorkItem(
 		id=str(uuid4()),
@@ -160,4 +198,6 @@ async def enqueue_city_tools(
 		calls=calls,
 		agent_id=agent_id,
 	)
+	if wait:
+		return await CITY_WORKER_POOL.enqueue_and_wait(item, timeout=timeout)
 	return await CITY_WORKER_POOL.enqueue(item)

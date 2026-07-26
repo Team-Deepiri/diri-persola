@@ -253,6 +253,7 @@ def register_city_tools(
 			"emit_viz_event",
 			"Emit a validated visualization event for the city UI.",
 			emit_viz_event,
+			parallel_safe=False,
 			tags=["viz", "city"],
 		)
 	)

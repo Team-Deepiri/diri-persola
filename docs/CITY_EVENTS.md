@@ -142,7 +142,10 @@ Child spawn includes `parent_id`, `parent_agent_id`, `knob_overrides`, `tool_tag
   "event_type": "cohesion.merge",
   "payload": {
     "summary": "...",
-    "roles": ["coordinator", "analyst", "executor"]
+    "roles": ["coordinator", "analyst", "executor"],
+    "parent_id": "...",
+    "parent_agent_id": "...",
+    "child_ids": ["...", "..."]
   }
 }
 ```

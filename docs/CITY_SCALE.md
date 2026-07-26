@@ -14,6 +14,7 @@ Persola keeps the same society primitives (families, commons, build/run) and add
 | Global concurrent tool batches | `PERSOLA_CITY_MAX_GLOBAL` | 32 |
 | Per-family concurrent | `PERSOLA_CITY_MAX_PER_FAMILY` | 8 |
 | Per-district concurrent | `PERSOLA_CITY_MAX_PER_DISTRICT` | 16 |
+| Per-job concurrent | `PERSOLA_CITY_MAX_PER_JOB` | 4 |
 | Worker count | `PERSOLA_CITY_WORKERS` | 4 |
 | Queue max | `PERSOLA_CITY_QUEUE_MAX` | 256 |
 | Parent / coordinator model | `PERSOLA_CITY_PARENT_MODEL` | `llama3:70b` |
@@ -25,7 +26,7 @@ Persola keeps the same society primitives (families, commons, build/run) and add
 
 ### ConcurrencyGovernor
 
-Fair locks: **global ∩ family ∩ district**. Prevents one family or one district from starving others.
+Fair locks: **global ∩ family ∩ district ∩ job**. Prevents one family, district, or hot job from starving others.
 
 ### CityWorkerPool
 
@@ -33,10 +34,10 @@ In-process asyncio queue + N workers. Tool batches are enqueued via:
 
 ```http
 POST /api/v1/city/jobs/{job_id}/enqueue
-{"calls":[{"name":"workspace_write","args":{...}}], "agent_id":"..."}
+{"calls":[{"name":"workspace_write","args":{...}}], "agent_id":"...", "wait": false}
 ```
 
-Poll work status:
+Set `"wait": true` to block until the worker finishes (tests / synchronous callers). Otherwise poll:
 
 ```http
 GET /api/v1/city/workers/work/{work_id}

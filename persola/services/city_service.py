@@ -715,8 +715,10 @@ class CityService:
 		*,
 		agent_id: UUID | None = None,
 		session_id: str | None = None,
+		governed: bool = True,
 	) -> dict[str, Any]:
 		"""Run structured tool calls against the city commons registry."""
+		from ..orchestration.city_scale import GLOBAL_GOVERNOR
 		from ..orchestration.city_tools import build_city_registry
 		from ..orchestration.tool_calls import parse_tool_calls
 
@@ -728,42 +730,59 @@ class CityService:
 			job.status = CityJobStatus.RUNNING.value
 			await self.db.flush()
 
-		registry = await build_city_registry(
-			session_id or f"city-job-{job_id}",
-			db=self.db,
-			job_id=job_id,
-			agent_id=agent_id,
-		)
+		acquired = False
+		if governed:
+			await GLOBAL_GOVERNOR.acquire(
+				family_id=str(job.family_id),
+				district=job.district,
+				job_id=str(job.id),
+			)
+			acquired = True
 
-		normalized: list[dict[str, Any]] = []
-		for call in calls:
-			if isinstance(call, str):
-				normalized.extend(parse_tool_calls(call))
-			elif isinstance(call, dict):
-				name = call.get("name")
-				if not name:
-					continue
-				args = call.get("args") or call.get("arguments") or {}
-				normalized.append({"name": str(name), "args": args if isinstance(args, dict) else {}})
+		try:
+			registry = await build_city_registry(
+				session_id or f"city-job-{job_id}",
+				db=self.db,
+				job_id=job_id,
+				agent_id=agent_id,
+			)
 
-		results: list[dict[str, Any]] = []
-		for call in normalized:
-			name = call["name"]
-			args = call.get("args") or {}
-			try:
-				result = await registry.run(name, **args)
-				ok = bool(result.get("ok")) if "ok" in result else not bool(result.get("error"))
-				results.append({"name": name, "args": args, "result": result, "ok": ok})
-			except Exception as exc:  # noqa: BLE001 — surface tool failures to caller
-				results.append({"name": name, "args": args, "error": str(exc), "ok": False})
+			normalized: list[dict[str, Any]] = []
+			for call in calls:
+				if isinstance(call, str):
+					normalized.extend(parse_tool_calls(call))
+				elif isinstance(call, dict):
+					name = call.get("name")
+					if not name:
+						continue
+					args = call.get("args") or call.get("arguments") or {}
+					normalized.append({"name": str(name), "args": args if isinstance(args, dict) else {}})
 
-		await self.db.commit()
-		fresh = await self.jobs.get(job_id)
-		return {
-			"job_id": str(job_id),
-			"status": fresh.status if fresh else job.status,
-			"tool_results": results,
-		}
+			results: list[dict[str, Any]] = []
+			for call in normalized:
+				name = call["name"]
+				args = call.get("args") or {}
+				try:
+					result = await registry.run(name, **args)
+					ok = bool(result.get("ok")) if "ok" in result else not bool(result.get("error"))
+					results.append({"name": name, "args": args, "result": result, "ok": ok})
+				except Exception as exc:  # noqa: BLE001 — surface tool failures to caller
+					results.append({"name": name, "args": args, "error": str(exc), "ok": False})
+
+			await self.db.commit()
+			fresh = await self.jobs.get(job_id)
+			return {
+				"job_id": str(job_id),
+				"status": fresh.status if fresh else job.status,
+				"tool_results": results,
+			}
+		finally:
+			if acquired:
+				GLOBAL_GOVERNOR.release(
+					family_id=str(job.family_id),
+					district=job.district,
+					job_id=str(job.id),
+				)
 
 	# ── Phase 3 wedge demo ───────────────────────────────────────────────
 
@@ -933,6 +952,11 @@ class CityService:
 			None,
 		)
 		parent_agent = UUID(parent["agent_id"]) if parent and parent.get("agent_id") else None
+		child_ids = [
+			m["agent_id"]
+			for m in members
+			if m.get("role_in_family") == "child" and m.get("agent_id")
+		]
 		await self.execute_tool_calls(
 			job_id,
 			[
@@ -943,6 +967,9 @@ class CityService:
 						"payload": {
 							"summary": "Wedge demo: siblings contributed notes; executor built and ran hello.py",
 							"roles": list(by_role.keys()),
+							"parent_id": parent.get("id") if parent else None,
+							"parent_agent_id": str(parent_agent) if parent_agent else None,
+							"child_ids": child_ids,
 						},
 					},
 				}
@@ -1167,6 +1194,7 @@ class CityService:
 		calls: list[dict[str, Any]],
 		*,
 		agent_id: UUID | None = None,
+		wait: bool = False,
 	) -> dict[str, Any]:
 		from ..orchestration.city_worker import enqueue_city_tools
 
@@ -1179,6 +1207,7 @@ class CityService:
 			district=job.district,
 			calls=calls,
 			agent_id=agent_id,
+			wait=wait,
 		)
 		return {
 			"work_id": item.id,
@@ -1186,4 +1215,49 @@ class CityService:
 			"job_id": str(job_id),
 			"district": job.district,
 			"queue": True,
+			"error": item.error,
+			"result": item.result,
 		}
+
+	async def invoke_team_on_job(
+		self,
+		job_id: UUID,
+		task: str,
+		*,
+		llm_fn,
+		agent_id: UUID | None = None,
+		use_langgraph: bool = True,
+	) -> dict[str, Any]:
+		"""
+		Phase 2/5 bridge: TeamOrchestrator with city commons tools bound to this job.
+		Structured tool_calls in specialist output invoke workspace_*/run_python.
+		"""
+		from ..orchestration.city_tools import build_city_registry
+		from ..orchestration.team import TeamOrchestrator
+		from ..orchestration.state import TeamSessionState
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		if job.status == CityJobStatus.PENDING.value:
+			job.status = CityJobStatus.RUNNING.value
+			await self.db.flush()
+
+		registry = await build_city_registry(
+			f"city-team-{job_id}",
+			db=self.db,
+			job_id=job_id,
+			agent_id=agent_id,
+		)
+		orch = TeamOrchestrator(
+			llm_fn=llm_fn,
+			tool_registry=registry,
+			use_langgraph=use_langgraph,
+		)
+		session = TeamSessionState(session_id=f"city-job-{job_id}")
+		result = await orch.run(task, session=session)
+		payload = result.to_dict()
+		payload["job_id"] = str(job_id)
+		payload["city_tools"] = [t["name"] for t in registry.list_tools() if "city" in (t.get("tags") or [])]
+		await self.db.commit()
+		return payload

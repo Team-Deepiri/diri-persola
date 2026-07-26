@@ -113,6 +113,13 @@ class ScaleProbeRequest(BaseModel):
 class EnqueueToolsRequest(BaseModel):
 	calls: list[dict[str, Any]] = Field(default_factory=list)
 	agent_id: Optional[str] = None
+	wait: bool = False
+
+
+class TeamInvokeJobRequest(BaseModel):
+	task: str = Field(..., min_length=1)
+	agent_id: Optional[str] = None
+	use_langgraph: bool = True
 
 
 @router.get("/families")
@@ -588,6 +595,39 @@ async def enqueue_job_tools(
 			UUID(job_id),
 			body.calls,
 			agent_id=UUID(body.agent_id) if body.agent_id else None,
+			wait=body.wait,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		status = 404 if "not found" in str(exc).lower() else 400
+		raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/team-invoke")
+async def team_invoke_job(
+	job_id: str,
+	body: TeamInvokeJobRequest,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Run TeamOrchestrator with city commons tools bound to this job."""
+	from ..integrations.llm import get_llm_provider
+
+	service = CityService(db)
+	llm = get_llm_provider()
+	if not llm.is_available():
+		raise HTTPException(status_code=503, detail="No LLM provider available")
+
+	async def llm_fn(system: str, user: str) -> str:
+		return await llm.chat([{"role": "user", "content": user}], system_prompt=system)
+
+	try:
+		return await service.invoke_team_on_job(
+			UUID(job_id),
+			body.task,
+			llm_fn=llm_fn,
+			agent_id=UUID(body.agent_id) if body.agent_id else None,
+			use_langgraph=body.use_langgraph,
 		)
 	except ValueError as exc:
 		await db.rollback()
