@@ -1955,6 +1955,15 @@ class CityService:
 						"name": (m.get("agent") or {}).get("name"),
 						"fingerprint": (m.get("personality") or {}).get("fingerprint"),
 						"top_traits": (m.get("personality") or {}).get("top_traits") or [],
+						"generation": m.get("generation", 0),
+						"age_ticks": m.get("age_ticks", 0),
+						"max_age_ticks": m.get("max_age_ticks"),
+						"life_status": m.get("life_status", "alive"),
+						"goals": m.get("goals") or [],
+						"dreams": m.get("dreams") or [],
+						"structured_thinking": m.get("structured_thinking"),
+						"growth": m.get("growth"),
+						"successor_of_id": m.get("successor_of_id"),
 					}
 				)
 				if m.get("parent_member_id"):
@@ -1969,6 +1978,21 @@ class CityService:
 								"from": parent["agent_id"],
 								"to": m["agent_id"],
 								"family_id": fam["id"],
+								"kind": "lineage",
+							}
+						)
+				if m.get("successor_of_id"):
+					ancestor = next(
+						(x for x in fam["members"] if x["id"] == m["successor_of_id"]),
+						None,
+					)
+					if ancestor:
+						graph_edges.append(
+							{
+								"from": ancestor["agent_id"],
+								"to": m["agent_id"],
+								"family_id": fam["id"],
+								"kind": "legacy",
 							}
 						)
 
@@ -2000,8 +2024,10 @@ class CityService:
 							}
 						)
 
+		eco = await self.city_ecosystem(event_limit=min(40, event_limit))
+
 		return {
-			"pack_version": "1.0",
+			"pack_version": "1.1",
 			"contract": "docs/CITY_EVENTS.md",
 			"generated_at": datetime.utcnow().isoformat(),
 			"vitals": {
@@ -2010,8 +2036,13 @@ class CityService:
 				"distinct_personalities": snap["distinct_personalities"],
 				"districts": snap["districts"],
 				"progress": snap["progress"],
+				"living": (eco.get("city") or {}).get("living"),
+				"deceased": (eco.get("city") or {}).get("deceased"),
+				"generation_max": (eco.get("city") or {}).get("generation_max"),
+				"avg_efficiency": (eco.get("city") or {}).get("avg_efficiency"),
 			},
 			"graph": {"nodes": graph_nodes, "edges": graph_edges},
+			"ecosystems": eco.get("ecosystems") or [],
 			"events": snap.get("events") or [],
 			"artifacts": artifacts_sample,
 			"heartbeat": heartbeat,
@@ -2020,6 +2051,8 @@ class CityService:
 				"poll": "GET /api/v1/city/events?family_id=…&after=…",
 				"stream": "GET /api/v1/city/events/stream?family_id=…",
 				"snapshot": "GET /api/v1/city/snapshot",
+				"ecosystem": "GET /api/v1/city/ecosystem",
+				"life_tick": "POST /api/v1/city/life/tick",
 				"export": "GET /api/v1/city/export/austin",
 			},
 		}

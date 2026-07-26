@@ -395,9 +395,9 @@ docs/
 
 ## 13. Immediate next implementation step
 
-Phases 0–10 are implemented on the communal-city branch. Remaining:
+Phases 0–10 + life-cycle (7/8 deepen) are implemented on the communal-city branch. Remaining:
 
-1. Refresh PR #46 body to match Phases 1–10 (not Phase 1-only).
-2. Consolidate dual ORM (`tables.py` → `models.py`) — see [SCHEMA_INTEGRATION_REBRAND_MAP.md](./SCHEMA_INTEGRATION_REBRAND_MAP.md).
-3. Production WSGI/ASGI hardening + real Cyrex bulk sync in staging.
-4. Austin consume `GET /city/export/austin` against live event feed.
+1. ~~Consolidate dual ORM (`tables.py` → `models.py`)~~ — done (`repo.py` wraps canonical models; `tables.py` deprecated aliases).
+2. Production WSGI/ASGI hardening + real Cyrex bulk sync in staging.
+3. Austin consume `GET /city/export/austin` pack **v1.1** (ecosystems + life fields + legacy edges).
+4. Optional: delete `persola/db/tables.py` / `config.py` after one release with no external imports.

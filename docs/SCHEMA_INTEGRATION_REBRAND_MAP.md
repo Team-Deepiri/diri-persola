@@ -33,7 +33,7 @@ Immediate schema integration **must** land `004` and wire services to `persola.d
 | Team tables (`team_*`) | **No replace** | City jobs may link `team_session_id`; keep team orchestration |
 | New tables | **Yes** | Six city tables in `004_communal_city` |
 | Alembic head | **Yes** | Deploy path: `alembic upgrade head` must include `004` |
-| Active ORM | **Yes — critical** | City models live in `persola/db/models.py`. Legacy `persola/db/tables.py` (`PersonaRow` / `AgentRow`) remains only for `repo.py` — **do not add city tables there** |
+| Active ORM | **Resolved** | Canonical: `persola/db/models.py` + Alembic. Legacy `tables.py` is a deprecated alias; `repo.py` wraps `PersonaRepository` / `AgentRepository`. |
 | Docker / `persola-db` | **No structural change** | Same Postgres service; schema version advances |
 | UI | Additive | `CityView` + city API client; Team Workbench stays |
 

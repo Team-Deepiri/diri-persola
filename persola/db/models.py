@@ -230,6 +230,8 @@ class AgentModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	def to_config(self) -> "AgentConfig":
 		from ..models import AgentConfig
 
+		# Prefer JSON tools column; avoid lazy-loading tool_configs (async-safe).
+		tools = list(self.tools or [])
 		return AgentConfig(
 			agent_id=str(self.id),
 			name=self.name,
@@ -239,7 +241,7 @@ class AgentModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 			max_tokens=self.max_tokens or 2000,
 			system_prompt=self.system_prompt or "",
 			persona_id=str(self.persona_id) if self.persona_id else None,
-			tools=[tool.name for tool in self.tool_configs] or list(self.tools),
+			tools=tools,
 			memory_enabled=self.memory_enabled,
 			session_id=None,
 		)
