@@ -131,6 +131,17 @@ function pulseFromEvent(ev: CityEvent): GraphPulse | null {
   return { agentId, kind, at: Date.now() };
 }
 
+function decisionForAgent(
+  results: Array<{ agent_id?: string; decision?: string; contributors?: Array<{ agent_id?: string }> }>,
+  agentId: string,
+): string | undefined {
+  for (const r of results) {
+    if (r.agent_id === agentId) return r.decision;
+    if (r.contributors?.some((c) => c.agent_id === agentId)) return r.decision;
+  }
+  return undefined;
+}
+
 export function CityView() {
   const [families, setFamilies] = useState<FamilySummary[]>([]);
   const [family, setFamily] = useState<FamilyDetail | null>(null);
@@ -150,7 +161,9 @@ export function CityView() {
     merged: number;
     vetoed: number;
     avg_cohesion: number;
+    avg_contributors?: number;
   } | null>(null);
+  const [heartbeat, setHeartbeat] = useState(false);
   const [goal, setGoal] = useState('Build hello.py in the commons and run it; siblings leave notes.');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -351,6 +364,61 @@ export function CityView() {
     };
   }, [live, streamMode, cityMode, family?.id, snapshot?.families, ingestEvents, loadSnapshot]);
 
+  // Phase 8 — living heartbeat: auto tick the city
+  useEffect(() => {
+    if (!heartbeat) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const { data } = await api.post<{
+          pulse: {
+            pulsed: number;
+            merged: number;
+            vetoed: number;
+            avg_cohesion: number;
+            avg_contributors?: number;
+            results: Array<{ agent_id?: string; decision?: string; contributors?: Array<{ agent_id?: string }> }>;
+          };
+        }>('/city/heartbeat/tick');
+        if (cancelled) return;
+        const p = data.pulse;
+        setLastPulse({
+          pulsed: p.pulsed,
+          merged: p.merged,
+          vetoed: p.vetoed,
+          avg_cohesion: p.avg_cohesion,
+          avg_contributors: p.avg_contributors,
+        });
+        const now = Date.now();
+        const ids = p.results.flatMap((r) =>
+          (r.contributors?.length ? r.contributors.map((c) => c.agent_id) : [r.agent_id]).filter(
+            Boolean,
+          ) as string[],
+        );
+        setPulses((prev) => [
+          ...prev.slice(-40),
+          ...ids.map((id, i) => ({
+            agentId: id,
+            kind: 'run' as const,
+            at: now - i * 20,
+          })),
+        ]);
+        await loadSnapshot();
+        setStatusLine(
+          `Heartbeat — ${p.pulsed} families · ${p.merged} merged · coh ${p.avg_cohesion}`,
+        );
+      } catch {
+        /* keep beating */
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, 12000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [heartbeat, loadSnapshot]);
+
   const onSeed = async () => {
     setLoading(true);
     setError(null);
@@ -414,33 +482,40 @@ export function CityView() {
         merged: number;
         vetoed: number;
         avg_cohesion: number;
-        results: Array<{ agent_id?: string; decision?: string }>;
+        avg_contributors?: number;
+        results: Array<{ agent_id?: string; decision?: string; contributors?: Array<{ agent_id?: string }> }>;
       }>('/city/pulse', {
         max_families: 12,
         districts: districtFilter.length ? districtFilter : undefined,
         auto_merge: true,
+        multi_contributor: true,
       });
       setLastPulse({
         pulsed: data.pulsed,
         merged: data.merged,
         vetoed: data.vetoed,
         avg_cohesion: data.avg_cohesion,
+        avg_contributors: data.avg_contributors,
       });
       const now = Date.now();
+      const pulseAgents = data.results.flatMap((r) =>
+        (r.contributors?.length
+          ? r.contributors.map((c) => c.agent_id)
+          : [r.agent_id]
+        ).filter(Boolean) as string[],
+      );
       setPulses((prev) => [
         ...prev.slice(-40),
-        ...data.results
-          .filter((r) => r.agent_id)
-          .map((r, i) => ({
-            agentId: r.agent_id!,
-            kind: (r.decision === 'veto' ? 'merge' : 'run') as GraphPulse['kind'],
-            at: now - i * 30,
-          })),
+        ...pulseAgents.map((id, i) => ({
+          agentId: id,
+          kind: (decisionForAgent(data.results, id) === 'veto' ? 'merge' : 'run') as GraphPulse['kind'],
+          at: now - i * 30,
+        })),
       ]);
       await loadSnapshot();
       await loadFamilies();
       setStatusLine(
-        `City pulse — ${data.pulsed} families · ${data.merged} merged · ${data.vetoed} vetoed · avg cohesion ${data.avg_cohesion}`,
+        `City pulse — ${data.pulsed} families · ${data.merged} merged · avg ${data.avg_contributors ?? '?'} contributors · cohesion ${data.avg_cohesion}`,
       );
     } catch (err) {
       setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
@@ -542,6 +617,14 @@ export function CityView() {
               onChange={(e) => setStreamMode(e.target.checked)}
             />
             SSE
+          </label>
+          <label className="live-toggle">
+            <input
+              type="checkbox"
+              checked={heartbeat}
+              onChange={(e) => setHeartbeat(e.target.checked)}
+            />
+            Heartbeat
           </label>
           <button type="button" className="btn ghost" onClick={() => setCityMode(true)} disabled={loading}>
             City view

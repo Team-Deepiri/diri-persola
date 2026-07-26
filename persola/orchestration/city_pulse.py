@@ -1,8 +1,9 @@
-"""Phase 7 — district work templates and personality routing for city pulse."""
+"""Phase 7/8 — district work templates and personality routing for city pulse."""
 
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 # Preferred roles to execute work in each district (first match wins)
 DISTRICT_ROLE_PREFERENCE: dict[str, tuple[str, ...]] = {
@@ -12,6 +13,9 @@ DISTRICT_ROLE_PREFERENCE: dict[str, tuple[str, ...]] = {
 	"ops": ("executor", "coordinator", "builder"),
 }
 
+# Supporting roles that always leave a note during multi-contributor pulse (Phase 8)
+SUPPORT_ROLES: tuple[str, ...] = ("analyst", "creative", "empath", "builder")
+
 
 def pick_agent_for_district(members: list[dict[str, Any]], district: str) -> dict[str, Any] | None:
 	"""Pick a family member whose role best matches the district."""
@@ -20,17 +24,20 @@ def pick_agent_for_district(members: list[dict[str, Any]], district: str) -> dic
 	for role in prefs:
 		if role in by_role:
 			return by_role[role]
-	# Fall back: any child, then parent
 	child = next((m for m in members if m.get("role_in_family") == "child"), None)
 	if child:
 		return child
 	return members[0] if members else None
 
 
+def _slug(family_slug: str) -> str:
+	return family_slug.replace(" ", "-").lower()[:32] or "family"
+
+
 def district_tool_calls(district: str, *, family_slug: str) -> list[dict[str, Any]]:
 	"""Structured tool calls a family runs during a city pulse for its district."""
 	d = (district or "build").lower()
-	slug = family_slug.replace(" ", "-").lower()[:32] or "family"
+	slug = _slug(family_slug)
 
 	if d == "viz":
 		return [
@@ -89,7 +96,6 @@ def district_tool_calls(district: str, *, family_slug: str) -> list[dict[str, An
 			},
 			{"name": "run_python", "args": {"path": f"ops/{slug}_health.py"}},
 		]
-	# build (default)
 	return [
 		{
 			"name": "workspace_write",
@@ -104,3 +110,78 @@ def district_tool_calls(district: str, *, family_slug: str) -> list[dict[str, An
 		},
 		{"name": "run_python", "args": {"path": f"build/{slug}.py"}},
 	]
+
+
+def support_note_call(role: str, *, family_slug: str, district: str) -> dict[str, Any]:
+	"""One sibling contribution note for multi-contributor pulse."""
+	slug = _slug(family_slug)
+	return {
+		"name": "workspace_write",
+		"args": {
+			"path": f"notes/{slug}_{role}.md",
+			"content": (
+				f"# {role.title()} note — {slug}\n"
+				f"District: {district}\n"
+				f"I contributed as {role} so the family commons stays cohesive.\n"
+			),
+		},
+	}
+
+
+def multi_contributor_plan(
+	members: list[dict[str, Any]],
+	*,
+	district: str,
+	family_slug: str,
+) -> list[dict[str, Any]]:
+	"""
+	Phase 8 plan: support roles leave notes, then district lead executes primary tools.
+
+	Returns a list of {agent_id, role_label, calls} batches.
+	"""
+	by_role = {m.get("role_label"): m for m in members if m.get("role_label") and m.get("agent_id")}
+	lead = pick_agent_for_district(members, district)
+	batches: list[dict[str, Any]] = []
+
+	for role in SUPPORT_ROLES:
+		member = by_role.get(role)
+		if member is None:
+			continue
+		if lead and member.get("agent_id") == lead.get("agent_id"):
+			continue
+		batches.append(
+			{
+				"agent_id": member["agent_id"],
+				"role_label": role,
+				"calls": [support_note_call(role, family_slug=family_slug, district=district)],
+			}
+		)
+
+	if lead and lead.get("agent_id"):
+		batches.append(
+			{
+				"agent_id": lead["agent_id"],
+				"role_label": lead.get("role_label"),
+				"calls": district_tool_calls(district, family_slug=family_slug),
+			}
+		)
+	elif members:
+		m = members[0]
+		batches.append(
+			{
+				"agent_id": m.get("agent_id"),
+				"role_label": m.get("role_label"),
+				"calls": district_tool_calls(district, family_slug=family_slug),
+			}
+		)
+
+	return batches
+
+
+def parse_agent_uuid(agent_id: str | None) -> UUID | None:
+	if not agent_id:
+		return None
+	try:
+		return UUID(str(agent_id))
+	except (TypeError, ValueError):
+		return None

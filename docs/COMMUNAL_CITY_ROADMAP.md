@@ -26,6 +26,8 @@ Phase 5  Scale toward ~100 agents (workers, districts, metrics)
 Phase 6  Prove 100+ distinct personalities + interactive city viz
     │
 Phase 7  City pulse — multi-district work + parent cohesion gate
+    │
+Phase 8  Living heartbeat — multi-contributor pulse + auto-tick
 ```
 
 ---
@@ -265,6 +267,24 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8d. Phase 8 — Living heartbeat
+
+**Goal:** The city keeps working — multiple siblings contribute per pulse; UI can auto-tick.
+
+| Deliverable | Notes |
+|-------------|-------|
+| Multi-contributor pulse | Support roles write notes; district lead builds/runs |
+| `GET /api/v1/city/heartbeat` | Vitals + last pulse |
+| `POST /api/v1/city/heartbeat/tick` | One automatic pulse tick |
+| UI Heartbeat toggle | Auto-pulse every ~12s |
+
+### 8d.1 Exit criteria
+
+- Pulse reports `avg_contributors ≥ 2` on seeded multi-role families.
+- Heartbeat tick returns vitals + pulse payload.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -321,6 +341,7 @@ docs/
 - [x] **P5** Scale path to ~100 with workers/districts/metrics
 - [x] **P6** Prove ≥100 distinct personalities + interactive city visualization
 - [x] **P7** City pulse + parent cohesion merge/veto + district filters
+- [x] **P8** Living heartbeat — multi-contributor pulse + auto-tick
 
 ---
 

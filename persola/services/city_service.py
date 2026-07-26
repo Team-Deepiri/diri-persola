@@ -60,6 +60,10 @@ def _clamp_knob(value: float) -> float:
 	return max(0.0, min(1.0, float(value)))
 
 
+# Phase 8 — process-local last pulse vitals for GET /heartbeat
+LAST_CITY_HEARTBEAT: dict[str, Any] = {}
+
+
 class CityService:
 	def __init__(self, db: AsyncSession) -> None:
 		self.db = db
@@ -1180,14 +1184,21 @@ class CityService:
 		districts: list[str] | None = None,
 		auto_merge: bool = True,
 		name_prefix: str = "pulse",
+		multi_contributor: bool = True,
 	) -> dict[str, Any]:
 		"""
-		Phase 7 — run a district-aware job across active families.
+		Phase 7/8 — run a district-aware job across active families.
 
-		Each family works its district commons with a personality-matched agent,
-		then optionally auto-merges when cohesion clears the family threshold.
+		Each family works its district commons with personality-matched agents
+		(Phase 8: multiple siblings contribute), then optionally auto-merges
+		when cohesion clears the family threshold.
 		"""
-		from ..orchestration.city_pulse import district_tool_calls, pick_agent_for_district
+		from ..orchestration.city_pulse import (
+			district_tool_calls,
+			multi_contributor_plan,
+			parse_agent_uuid,
+			pick_agent_for_district,
+		)
 
 		summaries = await self.list_families()
 		if max_families is not None:
@@ -1205,8 +1216,8 @@ class CityService:
 
 			fid = UUID(detail["id"])
 			slug = f"{name_prefix}-{detail['name']}"
-			agent = pick_agent_for_district(detail["members"], district)
-			agent_id = UUID(agent["agent_id"]) if agent and agent.get("agent_id") else None
+			lead = pick_agent_for_district(detail["members"], district)
+			lead_id = parse_agent_uuid(lead.get("agent_id") if lead else None)
 
 			job = await self.start_job(
 				family_id=fid,
@@ -1221,14 +1232,48 @@ class CityService:
 				payload={
 					"family_id": str(fid),
 					"district": district,
-					"agent_id": str(agent_id) if agent_id else None,
-					"role_label": agent.get("role_label") if agent else None,
+					"agent_id": str(lead_id) if lead_id else None,
+					"role_label": lead.get("role_label") if lead else None,
+					"multi_contributor": multi_contributor,
 				},
 			)
 
-			calls = district_tool_calls(district, family_slug=slug)
-			exec_result = await self.execute_tool_calls(job_id, calls, agent_id=agent_id)
-			tool_ok = all(r.get("ok", True) for r in exec_result.get("tool_results", []))
+			contributors: list[dict[str, Any]] = []
+			all_ok = True
+			if multi_contributor:
+				plan = multi_contributor_plan(
+					detail["members"],
+					district=district,
+					family_slug=slug,
+				)
+				for batch in plan:
+					aid = parse_agent_uuid(batch.get("agent_id"))
+					exec_result = await self.execute_tool_calls(
+						job_id,
+						batch["calls"],
+						agent_id=aid,
+					)
+					tool_ok = all(r.get("ok", True) for r in exec_result.get("tool_results", []))
+					all_ok = all_ok and tool_ok
+					contributors.append(
+						{
+							"agent_id": str(aid) if aid else None,
+							"role_label": batch.get("role_label"),
+							"ok": tool_ok,
+						}
+					)
+			else:
+				calls = district_tool_calls(district, family_slug=slug)
+				exec_result = await self.execute_tool_calls(job_id, calls, agent_id=lead_id)
+				all_ok = all(r.get("ok", True) for r in exec_result.get("tool_results", []))
+				contributors.append(
+					{
+						"agent_id": str(lead_id) if lead_id else None,
+						"role_label": lead.get("role_label") if lead else None,
+						"ok": all_ok,
+					}
+				)
+
 			score = await self.cohesion_score(job_id)
 
 			decision: dict[str, Any] | None = None
@@ -1238,7 +1283,7 @@ class CityService:
 					decision = await self.cohesion_decide(
 						job_id,
 						action="merge",
-						reason=f"Auto-merge after {district} pulse",
+						reason=f"Auto-merge after {district} pulse ({len(contributors)} contributors)",
 					)
 				else:
 					decision = await self.cohesion_decide(
@@ -1251,7 +1296,7 @@ class CityService:
 					job_id,
 					status=CityJobStatus.COMPLETED.value,
 					result_summary="pulse finished (manual cohesion)",
-					result={"cohesion": score, "exec": exec_result},
+					result={"cohesion": score, "contributors": contributors},
 				)
 
 			await self.emit_event(
@@ -1263,7 +1308,8 @@ class CityService:
 					"district": district,
 					"cohesion": score["score"],
 					"decision": (decision or {}).get("decision") if decision else None,
-					"agent_id": str(agent_id) if agent_id else None,
+					"agent_id": str(lead_id) if lead_id else None,
+					"contributors": len(contributors),
 				},
 			)
 
@@ -1273,11 +1319,13 @@ class CityService:
 					"family_name": detail["name"],
 					"district": district,
 					"job_id": str(job_id),
-					"agent_id": str(agent_id) if agent_id else None,
-					"role_label": agent.get("role_label") if agent else None,
+					"agent_id": str(lead_id) if lead_id else None,
+					"role_label": lead.get("role_label") if lead else None,
+					"contributors": contributors,
+					"contributor_count": len(contributors),
 					"cohesion": score,
 					"decision": (decision or {}).get("decision") if decision else None,
-					"ok": tool_ok,
+					"ok": all_ok,
 				}
 			)
 
@@ -1287,18 +1335,54 @@ class CityService:
 		for r in results:
 			by_district[r["district"]] = by_district.get(r["district"], 0) + 1
 
+		avg_cohesion = (
+			round(sum(r["cohesion"]["score"] for r in results) / len(results), 4) if results else 0.0
+		)
+		avg_contributors = (
+			round(sum(r["contributor_count"] for r in results) / len(results), 2) if results else 0.0
+		)
+
+		# Heartbeat memory for living-city UI
+		LAST_CITY_HEARTBEAT.clear()
+		LAST_CITY_HEARTBEAT.update(
+			{
+				"pulsed": len(results),
+				"merged": merged,
+				"vetoed": vetoed,
+				"avg_cohesion": avg_cohesion,
+				"avg_contributors": avg_contributors,
+				"districts": by_district,
+				"at": datetime.utcnow().isoformat(),
+			}
+		)
+
 		return {
 			"pulsed": len(results),
 			"merged": merged,
 			"vetoed": vetoed,
 			"districts": by_district,
 			"results": results,
-			"avg_cohesion": round(
-				sum(r["cohesion"]["score"] for r in results) / len(results),
-				4,
-			)
-			if results
-			else 0.0,
+			"avg_cohesion": avg_cohesion,
+			"avg_contributors": avg_contributors,
+			"multi_contributor": multi_contributor,
+		}
+
+	async def city_heartbeat(self) -> dict[str, Any]:
+		"""Phase 8 — last pulse snapshot + city vitals for the living UI."""
+		snap = await self.city_snapshot(event_limit=40)
+		last = dict(LAST_CITY_HEARTBEAT)
+		return {
+			"alive": snap["agent_count"] > 0,
+			"agent_count": snap["agent_count"],
+			"family_count": snap["family_count"],
+			"distinct_personalities": snap["distinct_personalities"],
+			"progress": snap["progress"],
+			"last_pulse": last,
+			"suggested_tick": {
+				"max_families": min(8, max(1, snap["family_count"] or 1)),
+				"multi_contributor": True,
+				"auto_merge": True,
+			},
 		}
 
 	async def scale_probe(

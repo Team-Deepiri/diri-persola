@@ -716,6 +716,7 @@ class CityPulseRequest(BaseModel):
 	districts: Optional[list[str]] = None
 	auto_merge: bool = True
 	name_prefix: str = Field(default="pulse", min_length=1, max_length=32)
+	multi_contributor: bool = True
 
 
 @router.post("/pulse")
@@ -725,8 +726,8 @@ async def city_pulse(
 	_rl: None = Depends(_city_rate_limit),
 ):
 	"""
-	Phase 7 — pulse the living city: each family runs district work with a
-	personality-matched agent, then parent cohesion merge/veto.
+	Phase 7/8 — pulse the living city: each family runs district work with
+	personality-matched agents (multi-contributor by default), then cohesion gate.
 	"""
 	payload = body or CityPulseRequest()
 	service = CityService(db)
@@ -736,7 +737,37 @@ async def city_pulse(
 			districts=payload.districts,
 			auto_merge=payload.auto_merge,
 			name_prefix=payload.name_prefix,
+			multi_contributor=payload.multi_contributor,
 		)
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/heartbeat")
+async def city_heartbeat(db: AsyncSession = Depends(get_db)):
+	"""Phase 8 — city vitals + last pulse for living UI / auto-tick."""
+	service = CityService(db)
+	return await service.city_heartbeat()
+
+
+@router.post("/heartbeat/tick")
+async def city_heartbeat_tick(
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Phase 8 — one automatic pulse tick using suggested defaults."""
+	service = CityService(db)
+	vitals = await service.city_heartbeat()
+	tick = vitals.get("suggested_tick") or {}
+	try:
+		pulse = await service.city_pulse(
+			max_families=tick.get("max_families", 4),
+			auto_merge=bool(tick.get("auto_merge", True)),
+			multi_contributor=bool(tick.get("multi_contributor", True)),
+			name_prefix="beat",
+		)
+		return {"vitals": await service.city_heartbeat(), "pulse": pulse}
 	except ValueError as exc:
 		await db.rollback()
 		raise HTTPException(status_code=400, detail=str(exc)) from exc
