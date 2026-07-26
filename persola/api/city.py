@@ -683,6 +683,65 @@ async def job_cohesion(job_id: str, db: AsyncSession = Depends(get_db)):
 		raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class CohesionDecideRequest(BaseModel):
+	action: str = Field(..., pattern="^(merge|veto)$")
+	reason: Optional[str] = None
+	force: bool = False
+
+
+@router.post("/jobs/{job_id}/cohesion/decide")
+async def job_cohesion_decide(
+	job_id: str,
+	body: CohesionDecideRequest,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Parent merge/veto gate for a city job (Phase 7)."""
+	service = CityService(db)
+	try:
+		return await service.cohesion_decide(
+			UUID(job_id),
+			action=body.action,
+			reason=body.reason,
+			force=body.force,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		status = 404 if "not found" in str(exc).lower() else 400
+		raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+class CityPulseRequest(BaseModel):
+	max_families: Optional[int] = Field(default=None, ge=1, le=40)
+	districts: Optional[list[str]] = None
+	auto_merge: bool = True
+	name_prefix: str = Field(default="pulse", min_length=1, max_length=32)
+
+
+@router.post("/pulse")
+async def city_pulse(
+	body: CityPulseRequest | None = None,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""
+	Phase 7 — pulse the living city: each family runs district work with a
+	personality-matched agent, then parent cohesion merge/veto.
+	"""
+	payload = body or CityPulseRequest()
+	service = CityService(db)
+	try:
+		return await service.city_pulse(
+			max_families=payload.max_families,
+			districts=payload.districts,
+			auto_merge=payload.auto_merge,
+			name_prefix=payload.name_prefix,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/families/{family_id}/cyrex/sync")
 async def family_cyrex_sync(
 	family_id: str,

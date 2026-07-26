@@ -145,10 +145,20 @@ Child spawn includes `parent_id`, `parent_agent_id`, `knob_overrides`, `tool_tag
     "roles": ["coordinator", "analyst", "executor"],
     "parent_id": "...",
     "parent_agent_id": "...",
-    "child_ids": ["...", "..."]
+    "child_ids": ["...", "..."],
+    "score": 0.72,
+    "threshold": 0.35
   }
 }
 ```
+
+### `cohesion.veto`
+
+Parent rejected the merge (Phase 7). Same identity fields as merge; job ends `failed`.
+
+### `city.pulse.started` / `city.pulse.finished`
+
+City-wide pulse wave (Phase 7). Payload includes `district`, `family_id`, `agent_id`, and on finish `cohesion` + `decision`.
 
 ### `viz.pulse` / `viz.custom`
 
@@ -175,6 +185,9 @@ Optional viz-only pulses from `emit_viz_event` (allowlisted).
 | `job.started` | Banner / district tint |
 | `job.completed` | Settle pulses; show summary |
 | `cohesion.merge` | Flash edges / parent node |
+| `cohesion.veto` | Dim parent / red pulse |
+| `city.pulse.started` | District wash brightens |
+| `city.pulse.finished` | Settle; show cohesion chip |
 
 ---
 

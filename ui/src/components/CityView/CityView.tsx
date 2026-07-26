@@ -125,7 +125,8 @@ function pulseFromEvent(ev: CityEvent): GraphPulse | null {
   if (t === 'artifact.written') kind = 'write';
   else if (t === 'run.started' || t === 'run.finished') kind = 'run';
   else if (t === 'agent.spawned') kind = 'spawn';
-  else if (t === 'cohesion.merge' || t === 'viz.pulse') kind = 'merge';
+  else if (t === 'cohesion.merge' || t === 'viz.pulse' || t === 'city.pulse.finished') kind = 'merge';
+  else if (t === 'cohesion.veto' || t === 'city.pulse.started') kind = 'run';
   if (!kind) return null;
   return { agentId, kind, at: Date.now() };
 }
@@ -143,6 +144,13 @@ export function CityView() {
   const [live, setLive] = useState(true);
   const [streamMode, setStreamMode] = useState(true);
   const [selected, setSelected] = useState<GraphMember | null>(null);
+  const [districtFilter, setDistrictFilter] = useState<string[]>([]);
+  const [lastPulse, setLastPulse] = useState<{
+    pulsed: number;
+    merged: number;
+    vetoed: number;
+    avg_cohesion: number;
+  } | null>(null);
   const [goal, setGoal] = useState('Build hello.py in the commons and run it; siblings leave notes.');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -396,6 +404,57 @@ export function CityView() {
     }
   };
 
+  const onPulse = async () => {
+    setLoading(true);
+    setError(null);
+    setCityMode(true);
+    try {
+      const { data } = await api.post<{
+        pulsed: number;
+        merged: number;
+        vetoed: number;
+        avg_cohesion: number;
+        results: Array<{ agent_id?: string; decision?: string }>;
+      }>('/city/pulse', {
+        max_families: 12,
+        districts: districtFilter.length ? districtFilter : undefined,
+        auto_merge: true,
+      });
+      setLastPulse({
+        pulsed: data.pulsed,
+        merged: data.merged,
+        vetoed: data.vetoed,
+        avg_cohesion: data.avg_cohesion,
+      });
+      const now = Date.now();
+      setPulses((prev) => [
+        ...prev.slice(-40),
+        ...data.results
+          .filter((r) => r.agent_id)
+          .map((r, i) => ({
+            agentId: r.agent_id!,
+            kind: (r.decision === 'veto' ? 'merge' : 'run') as GraphPulse['kind'],
+            at: now - i * 30,
+          })),
+      ]);
+      await loadSnapshot();
+      await loadFamilies();
+      setStatusLine(
+        `City pulse — ${data.pulsed} families · ${data.merged} merged · ${data.vetoed} vetoed · avg cohesion ${data.avg_cohesion}`,
+      );
+    } catch (err) {
+      setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleDistrict = (d: string) => {
+    setDistrictFilter((prev) =>
+      prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d],
+    );
+  };
+
   const onStartJob = async () => {
     if (!family) return;
     setLoading(true);
@@ -491,7 +550,10 @@ export function CityView() {
             Seed family
           </button>
           <button type="button" className="btn accent" onClick={onAwaken} disabled={loading}>
-            {loading ? 'Awakening…' : 'Awaken 100'}
+            {loading ? 'Working…' : 'Awaken 100'}
+          </button>
+          <button type="button" className="btn pulse-btn" onClick={onPulse} disabled={loading}>
+            Pulse city
           </button>
           <button type="button" className="btn primary" onClick={onWedgeRun} disabled={loading}>
             Run wedge
@@ -519,8 +581,30 @@ export function CityView() {
           <div className="progress-track">
             <div className="progress-fill" style={{ width: `${progressPct}%` }} />
           </div>
-          <span className="stat-label">{progressPct}% to 100</span>
+          <span className="stat-label">
+            {lastPulse
+              ? `pulse ${lastPulse.merged}/${lastPulse.pulsed} · coh ${lastPulse.avg_cohesion}`
+              : `${progressPct}% to 100`}
+          </span>
         </div>
+      </div>
+
+      <div className="district-filters">
+        {(['build', 'viz', 'research', 'ops'] as const).map((d) => (
+          <button
+            key={d}
+            type="button"
+            className={`district-chip ${d}${districtFilter.includes(d) || districtFilter.length === 0 ? ' on' : ''}`}
+            onClick={() => toggleDistrict(d)}
+          >
+            {d}
+          </button>
+        ))}
+        {districtFilter.length > 0 && (
+          <button type="button" className="district-chip clear" onClick={() => setDistrictFilter([])}>
+            all districts
+          </button>
+        )}
       </div>
 
       <div className="city-layout">
@@ -560,6 +644,7 @@ export function CityView() {
               pulses={pulses}
               selectedAgentId={selected?.agent_id ?? null}
               onSelectAgent={setSelected}
+              districtFilter={districtFilter}
               height={cityMode ? 560 : 320}
             />
           </div>

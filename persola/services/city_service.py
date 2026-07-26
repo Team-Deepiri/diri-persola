@@ -1068,6 +1068,239 @@ class CityService:
 			"run_count": len(runs),
 		}
 
+	def _cohesion_threshold(self, family: dict[str, Any] | FamilyModel) -> float:
+		policy = family.policy if isinstance(family, FamilyModel) else (family.get("policy") or {})
+		raw = policy.get("cohesion_min", 0.35) if isinstance(policy, dict) else 0.35
+		try:
+			return max(0.0, min(1.0, float(raw)))
+		except (TypeError, ValueError):
+			return 0.35
+
+	async def cohesion_decide(
+		self,
+		job_id: UUID,
+		*,
+		action: str,
+		reason: str | None = None,
+		force: bool = False,
+	) -> dict[str, Any]:
+		"""
+		Parent cohesion gate (Phase 7).
+
+		``merge`` — approve job when score ≥ family cohesion_min (or force).
+		``veto`` — reject job and emit cohesion.veto.
+		"""
+		action_l = (action or "").lower().strip()
+		if action_l not in {"merge", "veto"}:
+			raise ValueError("action must be merge or veto")
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		family = await self.get_family(job.family_id)
+		if family is None:
+			raise ValueError("Family not found")
+
+		score = await self.cohesion_score(job_id)
+		threshold = self._cohesion_threshold(family)
+		parent = next((m for m in family["members"] if m.get("role_in_family") == "parent"), None)
+		parent_agent = UUID(parent["agent_id"]) if parent and parent.get("agent_id") else None
+		child_ids = [
+			m["agent_id"]
+			for m in family["members"]
+			if m.get("role_in_family") == "child" and m.get("agent_id")
+		]
+
+		if action_l == "merge":
+			if not force and score["score"] < threshold:
+				raise ValueError(
+					f"Cohesion {score['score']} below threshold {threshold}; veto or force=true"
+				)
+			await self.execute_tool_calls(
+				job_id,
+				[
+					{
+						"name": "emit_viz_event",
+						"args": {
+							"event_type": "cohesion.merge",
+							"payload": {
+								"summary": reason or "Parent approved communal merge",
+								"score": score["score"],
+								"threshold": threshold,
+								"parent_id": parent.get("id") if parent else None,
+								"parent_agent_id": str(parent_agent) if parent_agent else None,
+								"child_ids": child_ids,
+							},
+						},
+					}
+				],
+				agent_id=parent_agent,
+			)
+			await self.set_job_status(
+				job_id,
+				status=CityJobStatus.COMPLETED.value,
+				result_summary=reason or "cohesion merge approved",
+				result={"cohesion": score, "decision": "merge", "threshold": threshold},
+			)
+			decision = "merge"
+		else:
+			await self.emit_event(
+				event_type="cohesion.veto",
+				family_id=job.family_id,
+				job_id=job_id,
+				payload={
+					"summary": reason or "Parent vetoed cohesion merge",
+					"score": score["score"],
+					"threshold": threshold,
+					"parent_id": parent.get("id") if parent else None,
+					"parent_agent_id": str(parent_agent) if parent_agent else None,
+					"child_ids": child_ids,
+				},
+			)
+			await self.set_job_status(
+				job_id,
+				status=CityJobStatus.FAILED.value,
+				result_summary=reason or "cohesion veto",
+				result={"cohesion": score, "decision": "veto", "threshold": threshold},
+			)
+			decision = "veto"
+
+		return {
+			"job_id": str(job_id),
+			"decision": decision,
+			"cohesion": score,
+			"threshold": threshold,
+			"job": await self.get_job(job_id),
+		}
+
+	async def city_pulse(
+		self,
+		*,
+		max_families: int | None = None,
+		districts: list[str] | None = None,
+		auto_merge: bool = True,
+		name_prefix: str = "pulse",
+	) -> dict[str, Any]:
+		"""
+		Phase 7 — run a district-aware job across active families.
+
+		Each family works its district commons with a personality-matched agent,
+		then optionally auto-merges when cohesion clears the family threshold.
+		"""
+		from ..orchestration.city_pulse import district_tool_calls, pick_agent_for_district
+
+		summaries = await self.list_families()
+		if max_families is not None:
+			summaries = summaries[: max(1, max_families)]
+		allowed = {d.lower() for d in districts} if districts else None
+
+		results: list[dict[str, Any]] = []
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			district = (detail.get("default_district") or "build").lower()
+			if allowed is not None and district not in allowed:
+				continue
+
+			fid = UUID(detail["id"])
+			slug = f"{name_prefix}-{detail['name']}"
+			agent = pick_agent_for_district(detail["members"], district)
+			agent_id = UUID(agent["agent_id"]) if agent and agent.get("agent_id") else None
+
+			job = await self.start_job(
+				family_id=fid,
+				goal=f"City pulse · {district} · {detail['name']}",
+				district=district,
+			)
+			job_id = UUID(job["id"])
+			await self.emit_event(
+				event_type="city.pulse.started",
+				family_id=fid,
+				job_id=job_id,
+				payload={
+					"family_id": str(fid),
+					"district": district,
+					"agent_id": str(agent_id) if agent_id else None,
+					"role_label": agent.get("role_label") if agent else None,
+				},
+			)
+
+			calls = district_tool_calls(district, family_slug=slug)
+			exec_result = await self.execute_tool_calls(job_id, calls, agent_id=agent_id)
+			tool_ok = all(r.get("ok", True) for r in exec_result.get("tool_results", []))
+			score = await self.cohesion_score(job_id)
+
+			decision: dict[str, Any] | None = None
+			if auto_merge:
+				threshold = self._cohesion_threshold(detail)
+				if score["score"] >= threshold:
+					decision = await self.cohesion_decide(
+						job_id,
+						action="merge",
+						reason=f"Auto-merge after {district} pulse",
+					)
+				else:
+					decision = await self.cohesion_decide(
+						job_id,
+						action="veto",
+						reason=f"Auto-veto: cohesion {score['score']} < {threshold}",
+					)
+			else:
+				await self.set_job_status(
+					job_id,
+					status=CityJobStatus.COMPLETED.value,
+					result_summary="pulse finished (manual cohesion)",
+					result={"cohesion": score, "exec": exec_result},
+				)
+
+			await self.emit_event(
+				event_type="city.pulse.finished",
+				family_id=fid,
+				job_id=job_id,
+				payload={
+					"family_id": str(fid),
+					"district": district,
+					"cohesion": score["score"],
+					"decision": (decision or {}).get("decision") if decision else None,
+					"agent_id": str(agent_id) if agent_id else None,
+				},
+			)
+
+			results.append(
+				{
+					"family_id": str(fid),
+					"family_name": detail["name"],
+					"district": district,
+					"job_id": str(job_id),
+					"agent_id": str(agent_id) if agent_id else None,
+					"role_label": agent.get("role_label") if agent else None,
+					"cohesion": score,
+					"decision": (decision or {}).get("decision") if decision else None,
+					"ok": tool_ok,
+				}
+			)
+
+		merged = sum(1 for r in results if r.get("decision") == "merge")
+		vetoed = sum(1 for r in results if r.get("decision") == "veto")
+		by_district: dict[str, int] = {}
+		for r in results:
+			by_district[r["district"]] = by_district.get(r["district"], 0) + 1
+
+		return {
+			"pulsed": len(results),
+			"merged": merged,
+			"vetoed": vetoed,
+			"districts": by_district,
+			"results": results,
+			"avg_cohesion": round(
+				sum(r["cohesion"]["score"] for r in results) / len(results),
+				4,
+			)
+			if results
+			else 0.0,
+		}
+
 	async def scale_probe(
 		self,
 		*,

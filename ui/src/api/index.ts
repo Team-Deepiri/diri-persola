@@ -84,6 +84,14 @@ export const cityApi = {
   getFamily: (id: string) => api.get(`/city/families/${id}`),
   snapshot: () => api.get('/city/snapshot'),
   awaken: () => api.post('/city/scale/awaken'),
+  pulse: (body: {
+    max_families?: number;
+    districts?: string[];
+    auto_merge?: boolean;
+    name_prefix?: string;
+  } = {}) => api.post('/city/pulse', body),
+  cohesionDecide: (jobId: string, body: { action: 'merge' | 'veto'; reason?: string; force?: boolean }) =>
+    api.post(`/city/jobs/${jobId}/cohesion/decide`, body),
   scaleProbe: (body: {
     mode?: 'fifty' | 'hundred';
     families?: number;

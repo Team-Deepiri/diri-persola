@@ -22,6 +22,9 @@ ALLOWED_VIZ_EVENT_TYPES = frozenset(
 		"job.started",
 		"job.completed",
 		"cohesion.merge",
+		"cohesion.veto",
+		"city.pulse.started",
+		"city.pulse.finished",
 		"viz.pulse",
 		"viz.custom",
 	}

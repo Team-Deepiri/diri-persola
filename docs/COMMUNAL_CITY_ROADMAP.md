@@ -24,6 +24,8 @@ Phase 4  City visualization + Austin event contract
 Phase 5  Scale toward ~100 agents (workers, districts, metrics)
     │
 Phase 6  Prove 100+ distinct personalities + interactive city viz
+    │
+Phase 7  City pulse — multi-district work + parent cohesion gate
 ```
 
 ---
@@ -244,6 +246,25 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8c. Phase 7 — City pulse + cohesion gate
+
+**Goal:** The awakened city *works* — families across districts execute personality-routed jobs; parents merge or veto.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `POST /api/v1/city/pulse` | Each active family runs district-specific commons work |
+| Personality routing | `city_pulse.py` picks executor/creative/analyst/… by district |
+| `POST /jobs/{id}/cohesion/decide` | Parent `merge` / `veto` with `cohesion_min` policy |
+| Events | `city.pulse.started` / `finished`, `cohesion.veto` |
+| UI | **Pulse city** + district filter chips |
+
+### 8c.1 Exit criteria
+
+- Pulse across ≥4 families covers multiple districts with merge/veto decisions.
+- Graph pulses update from pulse events; district filters hide/show columns.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -299,6 +320,7 @@ docs/
 - [x] **P4** City graph + live events; Austin contract documented
 - [x] **P5** Scale path to ~100 with workers/districts/metrics
 - [x] **P6** Prove ≥100 distinct personalities + interactive city visualization
+- [x] **P7** City pulse + parent cohesion merge/veto + district filters
 
 ---
 

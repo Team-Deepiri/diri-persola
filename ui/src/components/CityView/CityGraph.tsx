@@ -37,6 +37,8 @@ type Props = {
   pulses?: GraphPulse[];
   selectedAgentId?: string | null;
   onSelectAgent?: (member: GraphMember | null) => void;
+  /** Phase 7 — show only these districts (empty = all) */
+  districtFilter?: string[];
   width?: number;
   height?: number;
 };
@@ -79,6 +81,7 @@ export function CityGraph({
   pulses = [],
   selectedAgentId,
   onSelectAgent,
+  districtFilter,
   width = 960,
   height = 520,
 }: Props) {
@@ -87,10 +90,12 @@ export function CityGraph({
   const layout = useMemo(() => {
     const nodes: LaidOut[] = [];
     const edges: Array<{ from: LaidOut; to: LaidOut }> = [];
+    const filterSet =
+      districtFilter && districtFilter.length > 0 ? new Set(districtFilter) : null;
 
     const cityFamilies: GraphFamily[] =
       families && families.length > 0
-        ? families
+        ? families.filter((f) => !filterSet || filterSet.has(f.default_district))
         : members.length > 0
           ? [
               {
@@ -104,10 +109,13 @@ export function CityGraph({
 
     if (cityFamilies.length === 0) return { nodes, edges, districtBands: [] as Array<{ d: string; x: number; w: number }> };
 
+    const visibleDistricts = DISTRICTS.filter(
+      (d) => !filterSet || filterSet.has(d),
+    );
     const padX = 36;
     const padY = 48;
-    const colW = (width - padX * 2) / DISTRICTS.length;
-    const districtBands = DISTRICTS.map((d, i) => ({
+    const colW = (width - padX * 2) / Math.max(visibleDistricts.length, 1);
+    const districtBands = visibleDistricts.map((d, i) => ({
       d,
       x: padX + i * colW,
       w: colW,
@@ -176,7 +184,7 @@ export function CityGraph({
     }
 
     return { nodes, edges, districtBands };
-  }, [families, members, width, height]);
+  }, [families, members, width, height, districtFilter]);
 
   const pulseByAgent = useMemo(() => {
     const now = Date.now();
