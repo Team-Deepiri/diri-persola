@@ -79,4 +79,19 @@ export const sessionsApi = {
   getMessages: (sessionId: string) => api.get<Message[]>(`/sessions/${sessionId}/messages`),
 };
 
+export const cityApi = {
+  listFamilies: () => api.get('/city/families'),
+  getFamily: (id: string) => api.get(`/city/families/${id}`),
+  seedWedge: (name?: string) => api.post('/city/wedge/seed', { name: name ?? 'Wedge City Family' }),
+  runWedge: (body: { family_id?: string; goal?: string; family_name?: string } = {}) =>
+    api.post('/city/wedge/run', body),
+  startJob: (body: { family_id: string; goal: string; district?: string }) =>
+    api.post('/city/jobs', body),
+  getJob: (id: string) => api.get(`/city/jobs/${id}`),
+  listArtifacts: (jobId: string) => api.get(`/city/jobs/${jobId}/artifacts`),
+  listRuns: (jobId: string) => api.get(`/city/jobs/${jobId}/runs`),
+  listEvents: (jobId: string) => api.get(`/city/jobs/${jobId}/events`),
+  listTools: () => api.get('/city/tools'),
+};
+
 export default api;

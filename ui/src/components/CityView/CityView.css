@@ -1,0 +1,283 @@
+.city-view {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.city-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.city-header h1 {
+  margin: 0 0 6px;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+}
+
+.city-sub {
+  margin: 0;
+  color: #64748b;
+  max-width: 42rem;
+}
+
+.city-actions,
+.row-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #0f172a;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #fff;
+}
+
+.btn.ghost:hover:not(:disabled),
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.city-banner {
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  font-size: 0.9rem;
+}
+
+.city-banner.error {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.city-banner.ok {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.city-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr 220px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .city-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.city-sidebar,
+.city-events,
+.panel {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.city-sidebar h2,
+.city-events h2,
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+}
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.panel-head h2 {
+  margin: 0;
+}
+
+.family-list,
+.event-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.family-list button {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.85rem;
+}
+
+.family-list button.active,
+.family-list button:hover {
+  background: #ccfbf1;
+}
+
+.roster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.roster-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-top: 3px solid #0f766e;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.roster-card h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.role-tag {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #334155;
+}
+
+.meta,
+.muted,
+.job-meta {
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.goal-label {
+  display: block;
+  font-size: 0.8rem;
+  margin-bottom: 6px;
+  color: #475569;
+}
+
+.city-main textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px;
+  font: inherit;
+  margin-bottom: 10px;
+  resize: vertical;
+  min-height: 72px;
+}
+
+.pill {
+  display: inline-block;
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.pill.status-completed,
+.pill.status-succeeded {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.pill.status-failed,
+.pill.status-timeout,
+.pill.status-denied {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.pill.status-pending,
+.pill.status-running,
+.pill.status-planned {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+@media (max-width: 900px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+}
+
+.city-main .panel + .panel {
+  margin-top: 16px;
+}
+
+.city-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.city-table th,
+.city-table td {
+  text-align: left;
+  padding: 6px 4px;
+  border-bottom: 1px solid #e2e8f0;
+  vertical-align: top;
+}
+
+.city-table code {
+  font-size: 0.78rem;
+}
+
+.stdout {
+  margin-top: 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  overflow: auto;
+  max-height: 160px;
+}
+
+.event-feed li {
+  padding: 8px 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.event-type {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #0f172a;
+}

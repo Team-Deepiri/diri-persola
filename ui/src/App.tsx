@@ -5,6 +5,7 @@ import { ConversationView } from './components/Conversation';
 import { AnalysisView } from './components/Analysis';
 import { BlendTool } from './components/BlendTool';
 import { TeamWorkbench } from './components/TeamWorkbench';
+import { CityView } from './components/CityView';
 import { PersonaLibrary } from './components/PersonaLibrary';
 import './App.css';
 
@@ -54,6 +55,9 @@ function App() {
             <NavLink to="/teams" className={navCls}>
               <span>👥</span> Team
             </NavLink>
+            <NavLink to="/city" className={navCls}>
+              <span>🏙</span> City
+            </NavLink>
           </div>
         </nav>
       </aside>
@@ -67,6 +71,7 @@ function App() {
           <Route path="/analyze" element={<AnalysisView />} />
           <Route path="/blend" element={<BlendTool />} />
           <Route path="/teams" element={<TeamWorkbench />} />
+          <Route path="/city" element={<CityView />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

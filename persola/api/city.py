@@ -93,6 +93,16 @@ class InvokeJobRequest(BaseModel):
 	complete: bool = True
 
 
+class WedgeSeedRequest(BaseModel):
+	name: str = Field(default="Wedge City Family", min_length=1, max_length=255)
+
+
+class WedgeRunRequest(BaseModel):
+	family_id: Optional[str] = None
+	family_name: str = Field(default="Wedge City Family", min_length=1, max_length=255)
+	goal: Optional[str] = None
+
+
 @router.get("/families")
 async def list_families(limit: int = 50, db: AsyncSession = Depends(get_db)):
 	service = CityService(db)
@@ -328,6 +338,41 @@ async def invoke_job(
 			)
 		job = await service.get_job(jid)
 		return {"invoke": result, "job": job}
+	except ValueError as exc:
+		await db.rollback()
+		status = 404 if "not found" in str(exc).lower() else 400
+		raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+@router.post("/wedge/seed")
+async def seed_wedge_family(
+	body: WedgeSeedRequest,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Phase 3: create a parent + five specialist children for the demo."""
+	service = CityService(db)
+	try:
+		return await service.seed_wedge_family(name=body.name)
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/wedge/run")
+async def run_wedge_demo(
+	body: WedgeRunRequest,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Phase 3 wedge: seed family (optional), start job, multi-agent writes + run_python."""
+	service = CityService(db)
+	try:
+		return await service.run_wedge_demo(
+			family_id=UUID(body.family_id) if body.family_id else None,
+			family_name=body.family_name,
+			goal=body.goal,
+		)
 	except ValueError as exc:
 		await db.rollback()
 		status = 404 if "not found" in str(exc).lower() else 400

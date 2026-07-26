@@ -696,7 +696,8 @@ class CityService:
 			args = call.get("args") or {}
 			try:
 				result = await registry.run(name, **args)
-				results.append({"name": name, "args": args, "result": result, "ok": not bool(result.get("error"))})
+				ok = bool(result.get("ok")) if "ok" in result else not bool(result.get("error"))
+				results.append({"name": name, "args": args, "result": result, "ok": ok})
 			except Exception as exc:  # noqa: BLE001 — surface tool failures to caller
 				results.append({"name": name, "args": args, "error": str(exc), "ok": False})
 
@@ -706,4 +707,214 @@ class CityService:
 			"job_id": str(job_id),
 			"status": fresh.status if fresh else job.status,
 			"tool_results": results,
+		}
+
+	# ── Phase 3 wedge demo ───────────────────────────────────────────────
+
+	WEDGE_CHILDREN: tuple[dict[str, Any], ...] = (
+		{
+			"name": "Nova Analyst",
+			"role_label": "analyst",
+			"knob_overrides": {"reasoning_depth": 0.95, "accuracy": 0.95, "creativity": 0.35},
+		},
+		{
+			"name": "Lux Creative",
+			"role_label": "creative",
+			"knob_overrides": {"creativity": 0.95, "humor": 0.7, "openness": 0.9},
+		},
+		{
+			"name": "Forge Executor",
+			"role_label": "executor",
+			"knob_overrides": {"conscientiousness": 0.9, "step_by_step": 0.9, "reliability": 0.95},
+		},
+		{
+			"name": "Kai Empath",
+			"role_label": "empath",
+			"knob_overrides": {"empathy": 0.95, "agreeableness": 0.9, "verbosity": 0.55},
+		},
+		{
+			"name": "Atlas Builder",
+			"role_label": "builder",
+			"knob_overrides": {"patterns": 0.85, "synthetics": 0.8, "accuracy": 0.85},
+		},
+	)
+
+	async def seed_wedge_family(self, *, name: str = "Wedge City Family") -> dict[str, Any]:
+		"""Create a parent + 5 distinct children for the Phase 3 demo."""
+		family = await self.create_family(
+			name=name,
+			description="Phase 3 wedge demo family — shared commons, build and run.",
+			default_district=CityDistrict.BUILD.value,
+			parent_name="Orion Coordinator",
+			role_label="coordinator",
+			tool_tags=list(DEFAULT_CITY_TOOL_TAGS),
+			policy={"wedge": True, "max_children": 8},
+		)
+		family_id = UUID(family["id"])
+		for child in self.WEDGE_CHILDREN:
+			await self.spawn_child(
+				family_id,
+				name=str(child["name"]),
+				role_label=str(child["role_label"]),
+				knob_overrides=dict(child.get("knob_overrides") or {}),
+				tool_tags=list(DEFAULT_CITY_TOOL_TAGS),
+			)
+		detail = await self.get_family(family_id)
+		assert detail is not None
+		return detail
+
+	async def run_wedge_demo(
+		self,
+		*,
+		family_id: UUID | None = None,
+		goal: str | None = None,
+		family_name: str = "Wedge City Family",
+	) -> dict[str, Any]:
+		"""
+		Seed (if needed), start a build+run job, and have multiple children contribute.
+
+		Executor writes + runs Python; analyst/creative/empath/builder write commons notes.
+		"""
+		if family_id is not None:
+			family = await self.get_family(family_id)
+			if family is None:
+				raise ValueError("Family not found")
+		else:
+			family = await self.seed_wedge_family(name=family_name)
+
+		fid = UUID(family["id"])
+		members = family.get("members") or []
+		by_role: dict[str, dict[str, Any]] = {}
+		for m in members:
+			label = m.get("role_label") or m.get("role_in_family")
+			if label and label not in by_role:
+				by_role[str(label)] = m
+
+		job_goal = goal or "Build hello.py in the commons and run it; siblings leave notes."
+		job = await self.start_job(family_id=fid, goal=job_goal, district=CityDistrict.BUILD.value)
+		job_id = UUID(job["id"])
+
+		contributions: list[dict[str, Any]] = []
+
+		async def _as(role: str, calls: list[dict[str, Any]]) -> None:
+			member = by_role.get(role)
+			agent_id = UUID(member["agent_id"]) if member and member.get("agent_id") else None
+			result = await self.execute_tool_calls(job_id, calls, agent_id=agent_id)
+			contributions.append({"role": role, "agent_id": str(agent_id) if agent_id else None, **result})
+
+		await _as(
+			"analyst",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "notes/analysis.md",
+						"content": "# Analysis\nGoal is clear: ship a runnable hello artifact.\nSuccess = stdout contains wedge marker.\n",
+					},
+				}
+			],
+		)
+		await _as(
+			"creative",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "notes/spark.md",
+						"content": "# Spark\nMake the script greet the city by name.\n",
+					},
+				},
+				{
+					"name": "emit_viz_event",
+					"args": {"event_type": "viz.pulse", "payload": {"from": "creative", "mood": "excited"}},
+				},
+			],
+		)
+		await _as(
+			"empath",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "notes/users.md",
+						"content": "# Users\nOperators need to see who built and who ran.\n",
+					},
+				}
+			],
+		)
+		await _as(
+			"builder",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "notes/build.md",
+						"content": "# Build plan\n1. Write hello.py\n2. run_python\n3. Confirm stdout\n",
+					},
+				}
+			],
+		)
+		await _as(
+			"executor",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "hello.py",
+						"content": (
+							'print("persola-city-wedge")\n'
+							'print("sum", 1 + 2 + 3)\n'
+						),
+					},
+				},
+				{"name": "run_python", "args": {"path": "hello.py"}},
+			],
+		)
+
+		# Cohesion merge event from parent/coordinator
+		parent = by_role.get("coordinator") or next(
+			(m for m in members if m.get("role_in_family") == "parent"),
+			None,
+		)
+		parent_agent = UUID(parent["agent_id"]) if parent and parent.get("agent_id") else None
+		await self.execute_tool_calls(
+			job_id,
+			[
+				{
+					"name": "emit_viz_event",
+					"args": {
+						"event_type": "cohesion.merge",
+						"payload": {
+							"summary": "Wedge demo: siblings contributed notes; executor built and ran hello.py",
+							"roles": list(by_role.keys()),
+						},
+					},
+				}
+			],
+			agent_id=parent_agent,
+		)
+
+		runs = await self.list_runs(job_id)
+		arts = await self.list_artifacts(job_id)
+		succeeded = any(r.get("status") == "succeeded" and r.get("tool") == "run_python" for r in runs)
+		await self.set_job_status(
+			job_id,
+			status=CityJobStatus.COMPLETED.value if succeeded else CityJobStatus.FAILED.value,
+			result_summary="wedge demo completed" if succeeded else "wedge demo failed run_python",
+			result={
+				"artifact_count": len(arts),
+				"run_count": len(runs),
+				"contributions": len(contributions),
+			},
+		)
+
+		detail = await self.get_job(job_id)
+		return {
+			"family": await self.get_family(fid),
+			"job": detail,
+			"artifacts": arts,
+			"runs": runs,
+			"events": await self.list_events(job_id=job_id),
+			"contributions": contributions,
+			"success": succeeded,
 		}
