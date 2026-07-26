@@ -520,6 +520,11 @@ class FamilyMemberRole(str, Enum):
 	CHILD = "child"
 
 
+class FamilyMemberLifeStatus(str, Enum):
+	ALIVE = "alive"
+	DECEASED = "deceased"
+
+
 class CityDistrict(str, Enum):
 	BUILD = "build"
 	VIZ = "viz"
@@ -574,8 +579,15 @@ class FamilyMemberModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	__table_args__ = (
 		Index("idx_family_members_family_id", "family_id"),
 		Index("idx_family_members_agent_id", "agent_id"),
+		Index("idx_family_members_life_status", "life_status"),
+		Index("idx_family_members_generation", "generation"),
 		UniqueConstraint("family_id", "agent_id", name="uq_family_member_agent"),
 		_enum_constraint("role_in_family", tuple(r.value for r in FamilyMemberRole), name="ck_family_members_role"),
+		_enum_constraint(
+			"life_status",
+			tuple(s.value for s in FamilyMemberLifeStatus),
+			name="ck_family_members_life_status",
+		),
 	)
 
 	family_id: Mapped[PyUUID] = mapped_column(
@@ -598,6 +610,25 @@ class FamilyMemberModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	knob_overrides: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 	tool_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 	is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+	generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+	age_ticks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+	max_age_ticks: Mapped[int] = mapped_column(Integer, nullable=False, default=6)
+	life_status: Mapped[str] = mapped_column(
+		String(20),
+		nullable=False,
+		default=FamilyMemberLifeStatus.ALIVE.value,
+	)
+	goals: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+	dreams: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+	structured_thinking: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+	growth: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+	deceased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+	successor_of_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("family_members.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	legacy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
 	family: Mapped["FamilyModel"] = relationship(back_populates="members")
 	agent: Mapped["AgentModel"] = relationship()

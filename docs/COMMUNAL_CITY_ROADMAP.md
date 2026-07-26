@@ -252,40 +252,46 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
-## 8c. Phase 7 — City pulse + cohesion gate
+## 8c. Phase 7 — City pulse + ecosystem cohesion
 
-**Goal:** The awakened city *works* — families across districts execute personality-routed jobs; parents merge or veto.
+**Goal:** The awakened city *works* — families across districts execute personality-routed jobs; parents merge or veto; **ecosystems are visible** (goals, dreams, structured thinking, cohesion).
 
 | Deliverable | Notes |
 |-------------|-------|
 | `POST /api/v1/city/pulse` | Each active family runs district-specific commons work |
-| Personality routing | `city_pulse.py` picks executor/creative/analyst/… by district |
+| Personality routing | `city_pulse.py` picks executor/creative/analyst/… by district (**living only**) |
 | `POST /jobs/{id}/cohesion/decide` | Parent `merge` / `veto` with `cohesion_min` policy |
-| Events | `city.pulse.started` / `finished`, `cohesion.veto` |
-| UI | **Pulse city** + district filter chips |
+| `GET /api/v1/city/ecosystem` | Family ecosystems: cohesion, goals/dreams, living/deceased, efficiency |
+| Member life fields | goals, dreams, structured_thinking, growth, age (Alembic `005`) |
+| Events | `city.pulse.*`, `cohesion.veto`, `life.aged` |
+| UI | **Pulse city** + district filters + ecosystem vitals |
 
 ### 8c.1 Exit criteria
 
 - Pulse across ≥4 families covers multiple districts with merge/veto decisions.
+- Ecosystem payload exposes per-family cohesion + shared goals/dreams.
 - Graph pulses update from pulse events; district filters hide/show columns.
 
 ---
 
-## 8d. Phase 8 — Living heartbeat
+## 8d. Phase 8 — Living heartbeat + generational death
 
-**Goal:** The city keeps working — multiple siblings contribute per pulse; UI can auto-tick.
+**Goal:** The city keeps working; **death is natural**. Members age out; legacy (personality knobs, tools, goals, dreams, growth) passes to heirs so **efficiency does not collapse**.
 
 | Deliverable | Notes |
 |-------------|-------|
 | Multi-contributor pulse | Support roles write notes; district lead builds/runs |
-| `GET /api/v1/city/heartbeat` | Vitals + last pulse |
-| `POST /api/v1/city/heartbeat/tick` | One automatic pulse tick |
-| UI Heartbeat toggle | Auto-pulse every ~12s |
+| `GET /api/v1/city/heartbeat` | Vitals + living/deceased + generation era + efficiency |
+| `POST /api/v1/city/heartbeat/tick` | Life tick (age/death/succession) + pulse |
+| `POST /api/v1/city/life/tick` | Explicit generational tick |
+| Succession | `member.died` → `legacy.passed` → heir spawn (`successor_of_id`) |
+| UI Heartbeat / **Generations** | Auto-tick; ghost nodes for deceased; G# badges |
 
 ### 8d.1 Exit criteria
 
 - Pulse reports `avg_contributors ≥ 2` on seeded multi-role families.
-- Heartbeat tick returns vitals + pulse payload.
+- After forced aging past `max_age_ticks`, deaths spawn heirs and `efficiency_preserved` is true.
+- Heartbeat tick returns vitals + life + pulse payloads.
 
 ---
 

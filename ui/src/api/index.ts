@@ -101,6 +101,9 @@ export const cityApi = {
   } = {}) => api.post('/city/conduct', body),
   heartbeat: () => api.get('/city/heartbeat'),
   heartbeatTick: () => api.post('/city/heartbeat/tick'),
+  ecosystem: () => api.get('/city/ecosystem'),
+  lifeTick: (body: { max_families?: number; force_age?: number } = {}) =>
+    api.post('/city/life/tick', body),
   exportAustin: () => api.get('/city/export/austin'),
   commonsStatus: (jobId?: string) =>
     api.get('/city/commons/status', { params: jobId ? { job_id: jobId } : {} }),

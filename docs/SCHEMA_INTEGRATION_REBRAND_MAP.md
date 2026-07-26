@@ -48,6 +48,7 @@ diri-persola/
 │   ├── 002_expanded_runtime_models.py
 │   ├── 003_team_orchestration.py      # team_*
 │   └── 004_communal_city.py           # NEW — city schema (required)
+│   └── 005_city_life_cycle.py         # NEW — age/goals/death/generation
 ├── persola/
 │   ├── db/
 │   │   ├── models.py                  # EXTEND — Family*, City*, Workspace*

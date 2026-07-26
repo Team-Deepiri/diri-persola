@@ -756,18 +756,56 @@ async def city_heartbeat_tick(
 	db: AsyncSession = Depends(get_db),
 	_rl: None = Depends(_city_rate_limit),
 ):
-	"""Phase 8 — one automatic pulse tick using suggested defaults."""
+	"""Phase 8 — life tick (age/death/succession) + one automatic pulse tick."""
 	service = CityService(db)
 	vitals = await service.city_heartbeat()
 	tick = vitals.get("suggested_tick") or {}
 	try:
+		life = None
+		if tick.get("life_tick", True):
+			life = await service.life_tick(max_families=tick.get("max_families", 4))
 		pulse = await service.city_pulse(
 			max_families=tick.get("max_families", 4),
 			auto_merge=bool(tick.get("auto_merge", True)),
 			multi_contributor=bool(tick.get("multi_contributor", True)),
 			name_prefix="beat",
 		)
-		return {"vitals": await service.city_heartbeat(), "pulse": pulse}
+		return {
+			"vitals": await service.city_heartbeat(),
+			"life": life,
+			"pulse": pulse,
+		}
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class EcosystemTickRequest(BaseModel):
+	max_families: Optional[int] = Field(default=None, ge=1, le=50)
+	force_age: int = Field(default=1, ge=1, le=20)
+
+
+@router.get("/ecosystem")
+async def city_ecosystem(db: AsyncSession = Depends(get_db)):
+	"""Phase 7 — ecosystem viz: families, cohesion, goals/dreams, life stages."""
+	service = CityService(db)
+	return await service.city_ecosystem()
+
+
+@router.post("/life/tick")
+async def city_life_tick(
+	body: EcosystemTickRequest | None = None,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Phase 8 — age members; death passes legacy to the next generation."""
+	service = CityService(db)
+	payload = body or EcosystemTickRequest()
+	try:
+		return await service.life_tick(
+			max_families=payload.max_families,
+			force_age=payload.force_age,
+		)
 	except ValueError as exc:
 		await db.rollback()
 		raise HTTPException(status_code=400, detail=str(exc)) from exc

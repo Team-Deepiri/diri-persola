@@ -164,6 +164,18 @@ City-wide pulse wave (Phase 7). Payload includes `district`, `family_id`, `agent
 
 City conductor wave (Phase 10). Payload includes `mode` (`llm`|`tools`), `district`, `ok`, `cohesion`, `decision`.
 
+### `life.aged`
+
+Member aged one or more ticks. Payload: `member_id`, `age_ticks`, `max_age_ticks`, `generation`, `growth`, `structured_thinking`.
+
+### `member.died`
+
+Natural end of an agent’s active life. Payload: `member_id`, `generation`, `goals`, `dreams`. Graph: mark node deceased (ghost).
+
+### `legacy.passed`
+
+Knowledge/personality handoff to the next generation. Payload: `from_member_id`, `to_member_id`, `generation`, `goals`, `tool_tags`.
+
 ### `viz.pulse` / `viz.custom`
 
 Optional viz-only pulses from `emit_viz_event` (allowlisted).
@@ -192,6 +204,9 @@ Optional viz-only pulses from `emit_viz_event` (allowlisted).
 | `cohesion.veto` | Dim parent / red pulse |
 | `city.pulse.started` | District wash brightens |
 | `city.pulse.finished` | Settle; show cohesion chip |
+| `life.aged` | Age ring / growth tick on node |
+| `member.died` | Ghost node; keep lineage edge |
+| `legacy.passed` | Spawn heir; flash legacy edge from deceased → heir |
 
 ---
 

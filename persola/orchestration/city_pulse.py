@@ -18,16 +18,19 @@ SUPPORT_ROLES: tuple[str, ...] = ("analyst", "creative", "empath", "builder")
 
 
 def pick_agent_for_district(members: list[dict[str, Any]], district: str) -> dict[str, Any] | None:
-	"""Pick a family member whose role best matches the district."""
+	"""Pick a living family member whose role best matches the district."""
+	from .city_life import living_members
+
+	pool = living_members(members)
 	prefs = DISTRICT_ROLE_PREFERENCE.get(district, ("executor", "coordinator"))
-	by_role = {m.get("role_label"): m for m in members if m.get("role_label")}
+	by_role = {m.get("role_label"): m for m in pool if m.get("role_label")}
 	for role in prefs:
 		if role in by_role:
 			return by_role[role]
-	child = next((m for m in members if m.get("role_in_family") == "child"), None)
+	child = next((m for m in pool if m.get("role_in_family") == "child"), None)
 	if child:
 		return child
-	return members[0] if members else None
+	return pool[0] if pool else None
 
 
 def _slug(family_slug: str) -> str:
@@ -139,8 +142,11 @@ def multi_contributor_plan(
 
 	Returns a list of {agent_id, role_label, calls} batches.
 	"""
-	by_role = {m.get("role_label"): m for m in members if m.get("role_label") and m.get("agent_id")}
-	lead = pick_agent_for_district(members, district)
+	from .city_life import living_members
+
+	pool = living_members(members)
+	by_role = {m.get("role_label"): m for m in pool if m.get("role_label") and m.get("agent_id")}
+	lead = pick_agent_for_district(pool, district)
 	batches: list[dict[str, Any]] = []
 
 	for role in SUPPORT_ROLES:
@@ -165,8 +171,8 @@ def multi_contributor_plan(
 				"calls": district_tool_calls(district, family_slug=family_slug),
 			}
 		)
-	elif members:
-		m = members[0]
+	elif pool:
+		m = pool[0]
 		batches.append(
 			{
 				"agent_id": m.get("agent_id"),

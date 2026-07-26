@@ -14,6 +14,14 @@ export type GraphMember = {
     top_traits?: Array<{ knob: string; value: number }>;
   };
   agent?: { name: string; model?: string } | null;
+  generation?: number;
+  age_ticks?: number;
+  max_age_ticks?: number;
+  life_status?: string;
+  goals?: string[];
+  dreams?: string[];
+  structured_thinking?: number;
+  growth?: number;
 };
 
 export type GraphPulse = {
@@ -268,22 +276,24 @@ export function CityGraph({
           const pulse = pulseByAgent[n.agent_id];
           const selected = selectedAgentId === n.agent_id;
           const hovered = hoverId === n.agent_id;
-          const fill =
-            hueFromFingerprint(n.personality?.fingerprint) ?? colorFor(n.role_label || n.role_in_family);
+          const deceased = (n.life_status || 'alive') === 'deceased';
+          const fill = deceased
+            ? '#94a3b8'
+            : hueFromFingerprint(n.personality?.fingerprint) ?? colorFor(n.role_label || n.role_in_family);
           return (
             <g
               key={n.id}
               transform={`translate(${n.x}, ${n.y})`}
-              className={`city-node-group${selected ? ' selected' : ''}${hovered ? ' hovered' : ''}`}
+              className={`city-node-group${selected ? ' selected' : ''}${hovered ? ' hovered' : ''}${deceased ? ' deceased' : ''}`}
               onClick={(ev) => {
                 ev.stopPropagation();
                 onSelectAgent?.(n);
               }}
               onMouseEnter={() => setHoverId(n.agent_id)}
               onMouseLeave={() => setHoverId(null)}
-              style={{ cursor: 'pointer' }}
+              style={{ cursor: 'pointer', opacity: deceased ? 0.45 : 1 }}
             >
-              {pulse && (
+              {pulse && !deceased && (
                 <circle className={`city-pulse pulse-${pulse.kind}`} r={nodeR + 10} fill="none" stroke={fill} />
               )}
               {selected && <circle r={nodeR + 5} fill="none" stroke="#0f172a" strokeWidth={2} />}
@@ -291,11 +301,18 @@ export function CityGraph({
                 className="city-node"
                 r={selected || hovered ? nodeR + 2 : nodeR}
                 fill={fill}
+                stroke={deceased ? '#64748b' : undefined}
+                strokeDasharray={deceased ? '3 2' : undefined}
                 filter={pulse || selected ? 'url(#softGlow)' : undefined}
               />
               {nodeR >= 12 && (
                 <text className="city-node-label" textAnchor="middle" y={4} fontSize={nodeR > 14 ? 9 : 7}>
-                  {(n.role_label || n.role_in_family || '?').slice(0, 3).toUpperCase()}
+                  {deceased ? '†' : (n.role_label || n.role_in_family || '?').slice(0, 3).toUpperCase()}
+                </text>
+              )}
+              {!deceased && typeof n.generation === 'number' && n.generation > 0 && nodeR >= 10 && (
+                <text textAnchor="middle" y={nodeR + 11} fontSize={7} fill="#475569">
+                  G{n.generation}
                 </text>
               )}
             </g>
@@ -314,8 +331,11 @@ export function CityGraph({
           <strong>{hoverNode.agent?.name ?? 'Agent'}</strong>
           <div>
             {hoverNode.role_label || hoverNode.role_in_family} · {hoverNode.district}
+            {typeof hoverNode.generation === 'number' ? ` · G${hoverNode.generation}` : ''}
+            {(hoverNode.life_status || '') === 'deceased' ? ' · deceased' : ''}
           </div>
           <div className="muted">{hoverNode.familyName}</div>
+          {hoverNode.goals?.[0] && <div className="trait">goal: {hoverNode.goals[0]}</div>}
           {hoverNode.personality?.top_traits?.slice(0, 3).map((t) => (
             <div key={t.knob} className="trait">
               {t.knob} {(t.value * 100).toFixed(0)}%

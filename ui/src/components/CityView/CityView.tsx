@@ -13,6 +13,14 @@ type FamilySummary = {
 
 type FamilyMember = GraphMember & {
   tool_tags?: string[];
+  generation?: number;
+  age_ticks?: number;
+  max_age_ticks?: number;
+  life_status?: string;
+  goals?: string[];
+  dreams?: string[];
+  structured_thinking?: number;
+  growth?: number;
 };
 
 type FamilyDetail = FamilySummary & {
@@ -83,6 +91,29 @@ type CitySnapshot = {
   progress: number;
 };
 
+type EcosystemPayload = {
+  ecosystems: Array<{
+    family_id: string;
+    name: string;
+    district: string;
+    cohesion: number;
+    efficiency: number;
+    living: number;
+    deceased: number;
+    generation_max: number;
+    goals: string[];
+    dreams: string[];
+  }>;
+  city: {
+    living: number;
+    deceased: number;
+    family_count: number;
+    generation_max: number;
+    avg_efficiency: number;
+    distinct_personalities?: number;
+  };
+};
+
 type AwakenResult = {
   mode: string;
   families: number;
@@ -146,6 +177,7 @@ export function CityView() {
   const [families, setFamilies] = useState<FamilySummary[]>([]);
   const [family, setFamily] = useState<FamilyDetail | null>(null);
   const [snapshot, setSnapshot] = useState<CitySnapshot | null>(null);
+  const [ecosystem, setEcosystem] = useState<EcosystemPayload | null>(null);
   const [cityMode, setCityMode] = useState(true);
   const [job, setJob] = useState<Job | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -211,8 +243,12 @@ export function CityView() {
   }, []);
 
   const loadSnapshot = useCallback(async () => {
-    const { data } = await api.get<CitySnapshot>('/city/snapshot');
+    const [{ data }, eco] = await Promise.all([
+      api.get<CitySnapshot>('/city/snapshot'),
+      api.get<EcosystemPayload>('/city/ecosystem').catch(() => ({ data: null })),
+    ]);
     setSnapshot(data);
+    if (eco.data) setEcosystem(eco.data);
     if (data.events?.length) {
       setEvents((prev) => {
         const seen = new Set(prev.map((e) => e.id).filter(Boolean));
@@ -381,9 +417,16 @@ export function CityView() {
             avg_contributors?: number;
             results: Array<{ agent_id?: string; decision?: string; contributors?: Array<{ agent_id?: string }> }>;
           };
+          life?: {
+            aged: number;
+            died: number;
+            born: number;
+            efficiency_after: number;
+          };
         }>('/city/heartbeat/tick');
         if (cancelled) return;
         const p = data.pulse;
+        const life = data.life;
         setLastPulse({
           pulsed: p.pulsed,
           merged: p.merged,
@@ -406,8 +449,14 @@ export function CityView() {
           })),
         ]);
         await loadSnapshot();
+        const lifeBit =
+          life && (life.died > 0 || life.born > 0)
+            ? ` · ${life.died}† → ${life.born} heirs · eff ${life.efficiency_after}`
+            : life
+              ? ` · aged ${life.aged}`
+              : '';
         setStatusLine(
-          `Heartbeat — ${p.pulsed} families · ${p.merged} merged · coh ${p.avg_cohesion}`,
+          `Heartbeat — ${p.pulsed} families · ${p.merged} merged · coh ${p.avg_cohesion}${lifeBit}`,
         );
       } catch {
         /* keep beating */
@@ -540,6 +589,33 @@ export function CityView() {
       await loadFamilies();
       setStatusLine(
         `City pulse — ${data.pulsed} families · ${data.merged} merged · avg ${data.avg_contributors ?? '?'} contributors · cohesion ${data.avg_cohesion}`,
+      );
+    } catch (err) {
+      setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onLifeTick = async () => {
+    setLoading(true);
+    setError(null);
+    setCityMode(true);
+    try {
+      const { data } = await api.post<{
+        aged: number;
+        died: number;
+        born: number;
+        efficiency_before: number;
+        efficiency_after: number;
+        efficiency_preserved: boolean;
+        ecosystem: EcosystemPayload;
+      }>('/city/life/tick', { force_age: 2, max_families: 12 });
+      if (data.ecosystem) setEcosystem(data.ecosystem);
+      await loadSnapshot();
+      await loadFamilies();
+      setStatusLine(
+        `Generations — aged ${data.aged} · ${data.died} died · ${data.born} heirs · efficiency ${data.efficiency_before}→${data.efficiency_after}${data.efficiency_preserved ? ' (preserved)' : ''}`,
       );
     } catch (err) {
       setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
@@ -733,8 +809,9 @@ export function CityView() {
         <div>
           <h1>Persola City</h1>
           <p className="city-sub">
-            Living society of distinct personalities — districts, families, build/run pulses. Austin
-            stream: <code>/api/v1/city/events/stream</code>
+            Agent ecosystems — families in cohesion by personality, goals, and dreams. Age and growth
+            compound; death is natural — legacy passes so efficiency survives generations. Austin:{' '}
+            <code>/api/v1/city/events/stream</code>
           </p>
         </div>
         <div className="city-actions">
@@ -770,6 +847,9 @@ export function CityView() {
           <button type="button" className="btn pulse-btn" onClick={onPulse} disabled={loading}>
             Pulse city
           </button>
+          <button type="button" className="btn ghost" onClick={onLifeTick} disabled={loading}>
+            Generations
+          </button>
           <button type="button" className="btn ghost" onClick={onConduct} disabled={loading}>
             Conduct
           </button>
@@ -792,12 +872,24 @@ export function CityView() {
       <div className={`city-stage${cinema ? ' cinema-on' : ''}`}>
       <div className="city-stats">
         <div className="stat">
-          <span className="stat-value">{snapshot?.agent_count ?? 0}</span>
-          <span className="stat-label">agents</span>
+          <span className="stat-value">{ecosystem?.city.living ?? snapshot?.agent_count ?? 0}</span>
+          <span className="stat-label">living</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">{ecosystem?.city.deceased ?? 0}</span>
+          <span className="stat-label">deceased</span>
         </div>
         <div className="stat">
           <span className="stat-value">{snapshot?.family_count ?? 0}</span>
           <span className="stat-label">families</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">G{ecosystem?.city.generation_max ?? 0}</span>
+          <span className="stat-label">era</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">{ecosystem?.city.avg_efficiency?.toFixed?.(2) ?? '—'}</span>
+          <span className="stat-label">efficiency</span>
         </div>
         <div className="stat">
           <span className="stat-value">{snapshot?.distinct_personalities ?? 0}</span>
@@ -890,8 +982,21 @@ export function CityView() {
                     {selected.role_label || selected.role_in_family}
                   </div>
                   <p className="muted">
-                    {selected.district ?? '—'} · fingerprint{' '}
+                    {selected.district ?? '—'} · G{(selected as FamilyMember).generation ?? 0} · age{' '}
+                    {(selected as FamilyMember).age_ticks ?? 0}/
+                    {(selected as FamilyMember).max_age_ticks ?? '—'} ·{' '}
+                    {(selected as FamilyMember).life_status ?? 'alive'} · fingerprint{' '}
                     {selected.personality?.fingerprint ?? '—'}
+                  </p>
+                  {(selected as FamilyMember).goals?.length ? (
+                    <p className="muted">goals: {(selected as FamilyMember).goals?.join(' · ')}</p>
+                  ) : null}
+                  {(selected as FamilyMember).dreams?.length ? (
+                    <p className="muted">dreams: {(selected as FamilyMember).dreams?.slice(0, 2).join(' · ')}</p>
+                  ) : null}
+                  <p className="muted">
+                    thinking {(((selected as FamilyMember).structured_thinking ?? 0.5) * 100).toFixed(0)}% ·
+                    growth {(((selected as FamilyMember).growth ?? 0) * 100).toFixed(0)}%
                   </p>
                 </div>
                 <div className="trait-bars">

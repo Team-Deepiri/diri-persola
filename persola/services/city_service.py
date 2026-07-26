@@ -15,6 +15,7 @@ from ..db.models import (
 	CityEventModel,
 	CityJobModel,
 	CityJobStatus,
+	FamilyMemberLifeStatus,
 	FamilyMemberModel,
 	FamilyMemberRole,
 	FamilyModel,
@@ -33,6 +34,16 @@ from ..db.repositories.city_repository import (
 	WorkspaceRunRepository,
 )
 from ..engine import PersonaEngine
+from ..orchestration.city_life import (
+	DEFAULT_MAX_AGE_TICKS,
+	default_dreams,
+	default_goals,
+	default_structured_thinking,
+	ecosystem_cohesion,
+	inherit_legacy,
+	living_members,
+	mutate_knobs,
+)
 from ..orchestration.city_scale import DEFAULT_SCALE_CONFIG
 
 DEFAULT_CITY_TOOL_TAGS: list[str] = ["workspace", "run", "memory", "viz"]
@@ -121,6 +132,17 @@ class CityService:
 			},
 			"tool_tags": list(member.tool_tags or []),
 			"is_active": member.is_active,
+			"generation": int(getattr(member, "generation", 0) or 0),
+			"age_ticks": int(getattr(member, "age_ticks", 0) or 0),
+			"max_age_ticks": int(getattr(member, "max_age_ticks", DEFAULT_MAX_AGE_TICKS) or DEFAULT_MAX_AGE_TICKS),
+			"life_status": getattr(member, "life_status", None) or FamilyMemberLifeStatus.ALIVE.value,
+			"goals": list(getattr(member, "goals", None) or []),
+			"dreams": list(getattr(member, "dreams", None) or []),
+			"structured_thinking": float(getattr(member, "structured_thinking", 0.5) or 0.5),
+			"growth": float(getattr(member, "growth", 0.0) or 0.0),
+			"deceased_at": member.deceased_at.isoformat() if getattr(member, "deceased_at", None) else None,
+			"successor_of_id": str(member.successor_of_id) if getattr(member, "successor_of_id", None) else None,
+			"legacy": dict(getattr(member, "legacy", None) or {}),
 			"agent": {
 				"agent_id": str(agent.id),
 				"name": agent.name,
@@ -321,6 +343,15 @@ class CityService:
 				knob_overrides=parent_overrides,
 				tool_tags=tags,
 				is_active=True,
+				generation=0,
+				age_ticks=0,
+				max_age_ticks=int((policy or {}).get("max_age_ticks", DEFAULT_MAX_AGE_TICKS)),
+				life_status=FamilyMemberLifeStatus.ALIVE.value,
+				goals=default_goals(role_label),
+				dreams=default_dreams(role_label),
+				structured_thinking=default_structured_thinking(role_label),
+				growth=0.0,
+				legacy={},
 			)
 		)
 
@@ -426,6 +457,17 @@ class CityService:
 				knob_overrides=overrides,
 				tool_tags=inherited_tags,
 				is_active=True,
+				generation=int(getattr(parent_member, "generation", 0) or 0) + 1,
+				age_ticks=0,
+				max_age_ticks=int(
+					(family.policy or {}).get("max_age_ticks", getattr(parent_member, "max_age_ticks", DEFAULT_MAX_AGE_TICKS))
+				),
+				life_status=FamilyMemberLifeStatus.ALIVE.value,
+				goals=default_goals(role_label),
+				dreams=default_dreams(role_label),
+				structured_thinking=default_structured_thinking(role_label),
+				growth=0.0,
+				legacy={},
 			)
 		)
 
@@ -1378,21 +1420,339 @@ class CityService:
 			"multi_contributor": multi_contributor,
 		}
 
+	async def _family_efficiency(self, family_id: UUID, living_count: int) -> float:
+		jobs = await self.jobs.list_for_family(family_id, limit=200)
+		completed = sum(1 for j in jobs if j.status == CityJobStatus.COMPLETED.value)
+		return round(completed / max(1, living_count), 4)
+
+	async def city_ecosystem(self, *, event_limit: int = 40) -> dict[str, Any]:
+		"""
+		Phase 7 — visualize agent ecosystems: families as cohesive units with
+		goals, dreams, age/growth, and personality-aligned cohesion.
+		"""
+		summaries = await self.list_families()
+		ecosystems: list[dict[str, Any]] = []
+		living_total = 0
+		deceased_total = 0
+		gen_max = 0
+		efficiencies: list[float] = []
+
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			members = detail.get("members") or []
+			alive = living_members(members)
+			dead = [m for m in members if (m.get("life_status") or "") == FamilyMemberLifeStatus.DECEASED.value]
+			living_total += len(alive)
+			deceased_total += len(dead)
+			gmax = max((int(m.get("generation") or 0) for m in members), default=0)
+			gen_max = max(gen_max, gmax)
+			cohesion = ecosystem_cohesion(members)
+			eff = await self._family_efficiency(UUID(detail["id"]), len(alive))
+			efficiencies.append(eff)
+			goals: list[str] = []
+			dreams: list[str] = []
+			for m in alive:
+				for g in m.get("goals") or []:
+					if g not in goals:
+						goals.append(g)
+				for d in m.get("dreams") or []:
+					if d not in dreams:
+						dreams.append(d)
+			ecosystems.append(
+				{
+					"family_id": detail["id"],
+					"name": detail["name"],
+					"district": detail.get("default_district"),
+					"cohesion": cohesion,
+					"efficiency": eff,
+					"living": len(alive),
+					"deceased": len(dead),
+					"generation_max": gmax,
+					"goals": goals[:12],
+					"dreams": dreams[:8],
+					"members": members,
+				}
+			)
+
+		snap = await self.city_snapshot(event_limit=event_limit)
+		avg_eff = round(sum(efficiencies) / max(1, len(efficiencies)), 4) if efficiencies else 0.0
+		return {
+			"ecosystems": ecosystems,
+			"city": {
+				"living": living_total,
+				"deceased": deceased_total,
+				"family_count": len(ecosystems),
+				"generation_max": gen_max,
+				"avg_efficiency": avg_eff,
+				"distinct_personalities": snap.get("distinct_personalities"),
+			},
+			"events": snap.get("events") or [],
+		}
+
+	async def _succeed_member(self, deceased: FamilyMemberModel, family: FamilyModel) -> FamilyMemberModel:
+		"""Spawn next generation inheriting knobs, tools, goals, dreams — death without efficiency loss."""
+		ser = self._serialize_member(deceased)
+		legacy = inherit_legacy(ser)
+		next_gen = int(deceased.generation or 0) + 1
+		role_label = deceased.role_label or "builder"
+		agent_row = deceased.agent
+		if agent_row is None:
+			agent_row = await self.agents.get(deceased.agent_id)
+		base_name = agent_row.name if agent_row else "Heir"
+		# Strip prior generation suffixes
+		base = base_name.split(" · G")[0].rstrip()
+		heir_name = f"{base} · G{next_gen}"
+
+		parent_for_lineage = deceased
+		# Attach heir under a living parent when possible
+		living_parent = await self.members.get_parent(family.id)
+		if living_parent is not None and living_parent.life_status == FamilyMemberLifeStatus.ALIVE.value:
+			parent_for_lineage = living_parent
+
+		knobs = mutate_knobs(dict(deceased.knob_overrides or {}), generation=next_gen)
+		# Merge persona knobs when available
+		persona_id = agent_row.persona_id if agent_row else None
+		if persona_id:
+			persona = await self.personas.get(persona_id)
+			if persona is not None:
+				knobs = mutate_knobs({**persona.knob_values(), **knobs}, generation=next_gen)
+
+		tags = list(deceased.tool_tags or DEFAULT_CITY_TOOL_TAGS)
+		thinking = min(
+			1.0,
+			float(deceased.structured_thinking or 0.5) * 0.85 + float(deceased.growth or 0.0) * 0.2 + 0.05,
+		)
+		goals = list(deceased.goals or default_goals(role_label))
+		dreams = list(deceased.dreams or default_dreams(role_label))
+		# Carry one ancestral dream marker
+		dreams = list(dict.fromkeys([*dreams, f"honor legacy of {base}"]))[:6]
+
+		was_parent = deceased.role_in_family == FamilyMemberRole.PARENT.value
+		role_in_family = FamilyMemberRole.PARENT.value if was_parent else FamilyMemberRole.CHILD.value
+
+		child_model = self.model_tiers.for_role(
+			"parent" if was_parent else "child",
+			role_label,
+		)
+		heir_persona = await self.personas.create(
+			PersonaModel(
+				name=f"{heir_name} Persona",
+				description=f"Successor of {base_name}; generation {next_gen}",
+				**{field: knobs.get(field, 0.5) for field in PERSONA_KNOB_FIELDS},
+				model=child_model,
+			)
+		)
+		profile = heir_persona.to_profile()
+		heir_agent = await self.agents.create(
+			AgentModel(
+				name=heir_name,
+				role="assistant",
+				persona_id=heir_persona.id,
+				model=child_model,
+				system_prompt=self.engine.build_system_prompt(profile),
+				tools=tool_names_for_tags(tags),
+				memory_enabled=True,
+				is_active=True,
+			)
+		)
+		heir = await self.members.create(
+			FamilyMemberModel(
+				family_id=family.id,
+				agent_id=heir_agent.id,
+				parent_member_id=None if was_parent else parent_for_lineage.id,
+				role_in_family=role_in_family,
+				role_label=role_label,
+				knob_overrides={k: knobs[k] for k in knobs if k in PERSONA_KNOB_FIELDS},
+				tool_tags=tags,
+				is_active=True,
+				generation=next_gen,
+				age_ticks=0,
+				max_age_ticks=int((family.policy or {}).get("max_age_ticks", deceased.max_age_ticks or DEFAULT_MAX_AGE_TICKS)),
+				life_status=FamilyMemberLifeStatus.ALIVE.value,
+				goals=goals,
+				dreams=dreams,
+				structured_thinking=thinking,
+				growth=min(1.0, float(deceased.growth or 0.0) * 0.5 + 0.1),
+				successor_of_id=deceased.id,
+				legacy=legacy,
+			)
+		)
+		await self.emit_event(
+			event_type="legacy.passed",
+			family_id=family.id,
+			payload={
+				"from_member_id": str(deceased.id),
+				"to_member_id": str(heir.id),
+				"generation": next_gen,
+				"role_label": role_label,
+				"goals": goals,
+				"tool_tags": tags,
+			},
+		)
+		await self.emit_event(
+			event_type="agent.spawned",
+			family_id=family.id,
+			payload={
+				"family_id": str(family.id),
+				"member_id": str(heir.id),
+				"agent_id": str(heir_agent.id),
+				"parent_id": str(heir.parent_member_id) if heir.parent_member_id else None,
+				"role": role_in_family,
+				"role_label": role_label,
+				"generation": next_gen,
+				"successor_of_id": str(deceased.id),
+			},
+		)
+		return heir
+
+	async def life_tick(
+		self,
+		*,
+		max_families: int | None = None,
+		force_age: int = 1,
+	) -> dict[str, Any]:
+		"""
+		Phase 8 — age living members; on death, pass legacy to the next generation.
+
+		Efficiency (completed jobs / living members) is measured before and after so
+		the city proves it does not lose productivity when members die.
+		"""
+		summaries = await self.list_families()
+		if max_families is not None:
+			summaries = summaries[: max(1, max_families)]
+
+		aged = 0
+		died = 0
+		born = 0
+		family_reports: list[dict[str, Any]] = []
+		eff_before: list[float] = []
+		eff_after: list[float] = []
+
+		for s in summaries:
+			family = await self.families.get_with_members(UUID(s["id"]))
+			if family is None:
+				continue
+			alive_before = [
+				m
+				for m in family.members
+				if m.is_active and (m.life_status or FamilyMemberLifeStatus.ALIVE.value) == FamilyMemberLifeStatus.ALIVE.value
+			]
+			eb = await self._family_efficiency(family.id, len(alive_before))
+			eff_before.append(eb)
+
+			deaths: list[FamilyMemberModel] = []
+			for m in list(family.members):
+				if (m.life_status or "") == FamilyMemberLifeStatus.DECEASED.value:
+					continue
+				if not m.is_active:
+					continue
+				m.age_ticks = int(m.age_ticks or 0) + max(1, force_age)
+				# Growth + structured thinking from remaining in the ecosystem
+				m.growth = min(1.0, float(m.growth or 0.0) + 0.04)
+				m.structured_thinking = min(1.0, float(m.structured_thinking or 0.5) + 0.015)
+				aged += 1
+				await self.emit_event(
+					event_type="life.aged",
+					family_id=family.id,
+					payload={
+						"member_id": str(m.id),
+						"agent_id": str(m.agent_id),
+						"age_ticks": m.age_ticks,
+						"max_age_ticks": m.max_age_ticks,
+						"generation": m.generation,
+						"growth": m.growth,
+						"structured_thinking": m.structured_thinking,
+					},
+				)
+				max_age = int(m.max_age_ticks or DEFAULT_MAX_AGE_TICKS)
+				policy_max = (family.policy or {}).get("max_age_ticks")
+				if policy_max is not None:
+					max_age = int(policy_max)
+					m.max_age_ticks = max_age
+				if m.age_ticks >= max_age:
+					deaths.append(m)
+
+			for m in deaths:
+				m.life_status = FamilyMemberLifeStatus.DECEASED.value
+				m.is_active = False
+				m.deceased_at = datetime.utcnow()
+				agent = await self.agents.get(m.agent_id)
+				if agent is not None:
+					agent.is_active = False
+				died += 1
+				await self.emit_event(
+					event_type="member.died",
+					family_id=family.id,
+					payload={
+						"member_id": str(m.id),
+						"agent_id": str(m.agent_id),
+						"generation": m.generation,
+						"role_label": m.role_label,
+						"age_ticks": m.age_ticks,
+						"goals": list(m.goals or []),
+						"dreams": list(m.dreams or []),
+					},
+				)
+				heir = await self._succeed_member(m, family)
+				born += 1
+				family_reports.append(
+					{
+						"family_id": str(family.id),
+						"deceased_member_id": str(m.id),
+						"heir_member_id": str(heir.id),
+						"generation": heir.generation,
+					}
+				)
+
+			await self.db.flush()
+			# Refresh for efficiency
+			refreshed = await self.families.get_with_members(family.id)
+			alive_after = [
+				m
+				for m in (refreshed.members if refreshed else [])
+				if m.is_active and (m.life_status or "") == FamilyMemberLifeStatus.ALIVE.value
+			]
+			ea = await self._family_efficiency(family.id, len(alive_after))
+			eff_after.append(ea)
+
+		await self.db.commit()
+		avg_b = round(sum(eff_before) / max(1, len(eff_before)), 4) if eff_before else 0.0
+		avg_a = round(sum(eff_after) / max(1, len(eff_after)), 4) if eff_after else 0.0
+		return {
+			"aged": aged,
+			"died": died,
+			"born": born,
+			"successions": family_reports,
+			"efficiency_before": avg_b,
+			"efficiency_after": avg_a,
+			"efficiency_preserved": avg_a >= avg_b * 0.95 if avg_b > 0 else True,
+			"ecosystem": await self.city_ecosystem(event_limit=20),
+		}
+
 	async def city_heartbeat(self) -> dict[str, Any]:
 		"""Phase 8 — last pulse snapshot + city vitals for the living UI."""
 		snap = await self.city_snapshot(event_limit=40)
+		eco = await self.city_ecosystem(event_limit=10)
 		last = dict(LAST_CITY_HEARTBEAT)
+		city = eco.get("city") or {}
 		return {
-			"alive": snap["agent_count"] > 0,
+			"alive": (city.get("living") or snap["agent_count"]) > 0,
 			"agent_count": snap["agent_count"],
+			"living": city.get("living", snap["agent_count"]),
+			"deceased": city.get("deceased", 0),
 			"family_count": snap["family_count"],
 			"distinct_personalities": snap["distinct_personalities"],
+			"generation_max": city.get("generation_max", 0),
+			"avg_efficiency": city.get("avg_efficiency", 0),
 			"progress": snap["progress"],
 			"last_pulse": last,
 			"suggested_tick": {
 				"max_families": min(8, max(1, snap["family_count"] or 1)),
 				"multi_contributor": True,
 				"auto_merge": True,
+				"life_tick": True,
 			},
 		}
 

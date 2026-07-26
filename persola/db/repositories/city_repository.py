@@ -70,6 +70,21 @@ class FamilyMemberRepository(BaseRepository[FamilyMemberModel]):
 			.where(
 				FamilyMemberModel.family_id == family_id,
 				FamilyMemberModel.role_in_family == "parent",
+				FamilyMemberModel.life_status == "alive",
+				FamilyMemberModel.is_active.is_(True),
+			)
+			.options(selectinload(FamilyMemberModel.agent))
+		)
+		result = await self.session.execute(query)
+		parent = result.scalar_one_or_none()
+		if parent is not None:
+			return parent
+		# Fallback: any parent row (including deceased) for lineage attachment
+		query = (
+			select(FamilyMemberModel)
+			.where(
+				FamilyMemberModel.family_id == family_id,
+				FamilyMemberModel.role_in_family == "parent",
 			)
 			.options(selectinload(FamilyMemberModel.agent))
 		)
