@@ -773,6 +773,33 @@ async def city_heartbeat_tick(
 		raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/export/austin")
+async def export_austin_pack(
+	event_limit: int = 200,
+	include_artifacts: bool = True,
+	db: AsyncSession = Depends(get_db),
+):
+	"""Phase 9 — downloadable Austin viz pack (graph + events + samples)."""
+	service = CityService(db)
+	return await service.export_austin_pack(
+		event_limit=min(max(event_limit, 1), 500),
+		include_artifacts=include_artifacts,
+	)
+
+
+@router.get("/commons/status")
+async def commons_mirror_status(
+	job_id: Optional[str] = None,
+	db: AsyncSession = Depends(get_db),
+):
+	"""Phase 9 — disk commons mirror status (and optional job file list)."""
+	service = CityService(db)
+	try:
+		return await service.commons_mirror_info(UUID(job_id) if job_id else None)
+	except Exception as exc:
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/families/{family_id}/cyrex/sync")
 async def family_cyrex_sync(
 	family_id: str,

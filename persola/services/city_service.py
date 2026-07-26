@@ -630,10 +630,21 @@ class CityService:
 				"job_id": str(job_id),
 			},
 		)
+		# Phase 9 — optional disk commons mirror
+		mirror_info: dict[str, Any] = {"mirrored": False}
+		try:
+			from ..orchestration.commons_mirror import mirror_artifact
+
+			mirror_info = mirror_artifact(job_id=job_id, path=path, content=content)
+		except Exception as exc:  # noqa: BLE001 — mirror must not break writes
+			mirror_info = {"mirrored": False, "error": str(exc)}
+
 		if commit:
 			await self.db.commit()
 			await self.db.refresh(row)
-		return self._serialize_artifact(row)
+		payload = self._serialize_artifact(row)
+		payload["disk_mirror"] = mirror_info
+		return payload
 
 	async def record_run(
 		self,
@@ -1384,6 +1395,118 @@ class CityService:
 				"auto_merge": True,
 			},
 		}
+
+	async def export_austin_pack(
+		self,
+		*,
+		event_limit: int = 200,
+		include_artifacts: bool = True,
+		max_artifact_bytes: int = 64_000,
+	) -> dict[str, Any]:
+		"""
+		Phase 9 — self-contained pack for Austin / external viz consumers.
+
+		Includes snapshot graph, recent events, optional artifact samples,
+		and the frozen event contract version stamp.
+		"""
+		from ..orchestration.commons_mirror import mirror_status
+
+		snap = await self.city_snapshot(event_limit=event_limit)
+		heartbeat = await self.city_heartbeat()
+
+		# Compact graph nodes for viz (no full persona dumps)
+		graph_nodes: list[dict[str, Any]] = []
+		graph_edges: list[dict[str, Any]] = []
+		for fam in snap.get("families") or []:
+			for m in fam.get("members") or []:
+				graph_nodes.append(
+					{
+						"id": m["agent_id"],
+						"member_id": m["id"],
+						"family_id": fam["id"],
+						"family_name": fam["name"],
+						"district": fam.get("default_district"),
+						"role": m.get("role_label") or m.get("role_in_family"),
+						"name": (m.get("agent") or {}).get("name"),
+						"fingerprint": (m.get("personality") or {}).get("fingerprint"),
+						"top_traits": (m.get("personality") or {}).get("top_traits") or [],
+					}
+				)
+				if m.get("parent_member_id"):
+					# Resolve parent agent_id within family
+					parent = next(
+						(x for x in fam["members"] if x["id"] == m["parent_member_id"]),
+						None,
+					)
+					if parent:
+						graph_edges.append(
+							{
+								"from": parent["agent_id"],
+								"to": m["agent_id"],
+								"family_id": fam["id"],
+							}
+						)
+
+		artifacts_sample: list[dict[str, Any]] = []
+		if include_artifacts:
+			for fam in snap.get("families") or []:
+				jobs = await self.jobs.list_for_family(UUID(fam["id"]), limit=3)
+				for job in jobs:
+					arts = await self.artifacts.list_for_job(job.id, limit=20)
+					for a in arts:
+						content = a.content or ""
+						truncated = False
+						if len(content.encode("utf-8")) > max_artifact_bytes:
+							content = content.encode("utf-8")[:max_artifact_bytes].decode(
+								"utf-8", errors="ignore"
+							)
+							truncated = True
+						artifacts_sample.append(
+							{
+								"job_id": str(job.id),
+								"family_id": fam["id"],
+								"path": a.path,
+								"version": a.version,
+								"content": content,
+								"truncated": truncated,
+								"created_by_agent_id": str(a.created_by_agent_id)
+								if a.created_by_agent_id
+								else None,
+							}
+						)
+
+		return {
+			"pack_version": "1.0",
+			"contract": "docs/CITY_EVENTS.md",
+			"generated_at": datetime.utcnow().isoformat(),
+			"vitals": {
+				"agent_count": snap["agent_count"],
+				"family_count": snap["family_count"],
+				"distinct_personalities": snap["distinct_personalities"],
+				"districts": snap["districts"],
+				"progress": snap["progress"],
+			},
+			"graph": {"nodes": graph_nodes, "edges": graph_edges},
+			"events": snap.get("events") or [],
+			"artifacts": artifacts_sample,
+			"heartbeat": heartbeat,
+			"commons_mirror": mirror_status(),
+			"hints": {
+				"poll": "GET /api/v1/city/events?family_id=…&after=…",
+				"stream": "GET /api/v1/city/events/stream?family_id=…",
+				"snapshot": "GET /api/v1/city/snapshot",
+				"export": "GET /api/v1/city/export/austin",
+			},
+		}
+
+	async def commons_mirror_info(self, job_id: UUID | None = None) -> dict[str, Any]:
+		from ..orchestration.commons_mirror import list_mirrored_files, mirror_status
+
+		info = mirror_status()
+		if job_id is not None:
+			info["job_id"] = str(job_id)
+			info["files"] = list_mirrored_files(job_id)
+		return info
 
 	async def scale_probe(
 		self,

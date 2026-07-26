@@ -373,6 +373,50 @@
   animation: pulseGlow 2.4s ease-in-out infinite;
 }
 
+.btn.cinema-btn {
+  background: #111827;
+  border-color: #111827;
+  color: #f9fafb;
+}
+
+.city-banner.cinema {
+  background: linear-gradient(90deg, #0f172a, #312e81);
+  color: #e0e7ff;
+  border: 1px solid #4338ca;
+  letter-spacing: 0.02em;
+}
+
+.city-stage.cinema-on {
+  position: relative;
+}
+
+.city-stage.cinema-on::before {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  inset: -8px;
+  border-radius: 16px;
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  box-shadow: 0 0 40px rgba(124, 58, 237, 0.2);
+  animation: cinemaFrame 3s ease-in-out infinite;
+  z-index: 0;
+}
+
+.city-stage.cinema-on > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes cinemaFrame {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 @keyframes pulseGlow {
   0%,
   100% {

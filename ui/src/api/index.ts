@@ -89,7 +89,13 @@ export const cityApi = {
     districts?: string[];
     auto_merge?: boolean;
     name_prefix?: string;
+    multi_contributor?: boolean;
   } = {}) => api.post('/city/pulse', body),
+  heartbeat: () => api.get('/city/heartbeat'),
+  heartbeatTick: () => api.post('/city/heartbeat/tick'),
+  exportAustin: () => api.get('/city/export/austin'),
+  commonsStatus: (jobId?: string) =>
+    api.get('/city/commons/status', { params: jobId ? { job_id: jobId } : {} }),
   cohesionDecide: (jobId: string, body: { action: 'merge' | 'veto'; reason?: string; force?: boolean }) =>
     api.post(`/city/jobs/${jobId}/cohesion/decide`, body),
   scaleProbe: (body: {

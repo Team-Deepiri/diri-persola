@@ -120,3 +120,21 @@ GET /api/v1/city/jobs/{job_id}/cohesion
 ```
 
 `score = 0.6 * participation + 0.4 * tool_success_rate` where participation is the fraction of family members who wrote an artifact or started a run.
+
+---
+
+## Disk commons mirror (Phase 9)
+
+Set `PERSOLA_CITY_COMMONS_ROOT` to a writable directory. Every `workspace_write` also lands at:
+
+```text
+$PERSOLA_CITY_COMMONS_ROOT/jobs/{job_id}/{artifact_path}
+```
+
+```http
+GET /api/v1/city/commons/status
+GET /api/v1/city/commons/status?job_id={uuid}
+GET /api/v1/city/export/austin
+```
+
+The Austin pack is a self-contained JSON snapshot (graph, events, artifact samples) for external visualization.

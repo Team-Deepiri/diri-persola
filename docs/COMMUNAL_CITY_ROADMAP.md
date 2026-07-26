@@ -28,6 +28,8 @@ Phase 6  Prove 100+ distinct personalities + interactive city viz
 Phase 7  City pulse — multi-district work + parent cohesion gate
     │
 Phase 8  Living heartbeat — multi-contributor pulse + auto-tick
+    │
+Phase 9  Austin export pack + disk commons + cinema demo
 ```
 
 ---
@@ -285,6 +287,24 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8e. Phase 9 — Austin pack + disk commons + cinema
+
+**Goal:** Hand Austin a self-contained viz pack; optionally mirror commons to disk; ship a one-click cinema demo.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `GET /api/v1/city/export/austin` | Graph nodes/edges, events, artifact samples, contract hints |
+| Disk commons | `PERSOLA_CITY_COMMONS_ROOT` mirrors writes under `jobs/{id}/…` |
+| `GET /api/v1/city/commons/status` | Mirror enabled + optional job file list |
+| UI **Cinema** / **Export Austin** | Auto awaken+pulse+district spotlight; download JSON pack |
+
+### 8e.1 Exit criteria
+
+- Export pack has `pack_version`, graph, events, hints.
+- With commons root set, artifact writes appear on disk.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -342,6 +362,7 @@ docs/
 - [x] **P6** Prove ≥100 distinct personalities + interactive city visualization
 - [x] **P7** City pulse + parent cohesion merge/veto + district filters
 - [x] **P8** Living heartbeat — multi-contributor pulse + auto-tick
+- [x] **P9** Austin export pack + disk commons mirror + cinema demo
 
 ---
 

@@ -164,6 +164,8 @@ export function CityView() {
     avg_contributors?: number;
   } | null>(null);
   const [heartbeat, setHeartbeat] = useState(false);
+  const [cinema, setCinema] = useState(false);
+  const [cinemaLine, setCinemaLine] = useState<string | null>(null);
   const [goal, setGoal] = useState('Build hello.py in the commons and run it; siblings leave notes.');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -419,6 +421,28 @@ export function CityView() {
     };
   }, [heartbeat, loadSnapshot]);
 
+  // Phase 9 — cinema district spotlight cycle
+  useEffect(() => {
+    if (!cinema) return;
+    const districts = ['build', 'viz', 'research', 'ops'] as const;
+    let i = 0;
+    setDistrictFilter([districts[0]]);
+    const id = window.setInterval(() => {
+      i = (i + 1) % districts.length;
+      setDistrictFilter([districts[i]]);
+      setCinemaLine(`Spotlight · ${districts[i]} district`);
+    }, 2800);
+    const stop = window.setTimeout(() => {
+      setCinema(false);
+      setDistrictFilter([]);
+      setCinemaLine(null);
+    }, 14000);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(stop);
+    };
+  }, [cinema]);
+
   const onSeed = async () => {
     setLoading(true);
     setError(null);
@@ -530,6 +554,79 @@ export function CityView() {
     );
   };
 
+  const onExportAustin = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const { data } = await api.get('/city/export/austin');
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `persola-austin-pack-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setStatusLine(
+        `Austin pack exported — ${data.vitals?.agent_count ?? 0} agents, ${data.events?.length ?? 0} events.`,
+      );
+    } catch (err) {
+      setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onCinema = async () => {
+    setCinema(true);
+    setCityMode(true);
+    setHeartbeat(false);
+    setError(null);
+    setLoading(true);
+    try {
+      setCinemaLine('Scanning the skyline…');
+      let snap = await loadSnapshot();
+      if ((snap?.agent_count ?? 0) < 20) {
+        setCinemaLine('Awakening one hundred personalities…');
+        await api.post('/city/scale/awaken');
+        snap = await loadSnapshot();
+        await loadFamilies();
+      }
+      setCinemaLine('Districts lighting up — pulsing the commons…');
+      const { data } = await api.post<{
+        pulsed: number;
+        merged: number;
+        avg_cohesion: number;
+        avg_contributors?: number;
+        results: Array<{ agent_id?: string; contributors?: Array<{ agent_id?: string }> }>;
+      }>('/city/pulse', { max_families: 12, multi_contributor: true, auto_merge: true });
+      setLastPulse({
+        pulsed: data.pulsed,
+        merged: data.merged,
+        vetoed: 0,
+        avg_cohesion: data.avg_cohesion,
+        avg_contributors: data.avg_contributors,
+      });
+      const now = Date.now();
+      const ids = data.results.flatMap((r) =>
+        (r.contributors?.length ? r.contributors.map((c) => c.agent_id) : [r.agent_id]).filter(
+          Boolean,
+        ) as string[],
+      );
+      setPulses(ids.map((id, i) => ({ agentId: id, kind: 'run' as const, at: now - i * 25 })));
+      await loadSnapshot();
+      setCinemaLine(
+        `Cinema pulse complete — ${data.pulsed} families · cohesion ${data.avg_cohesion}`,
+      );
+      setStatusLine('Cinema demo finished — export an Austin pack or enable Heartbeat.');
+    } catch (err) {
+      setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
+      setCinemaLine(null);
+      setCinema(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const onStartJob = async () => {
     if (!family) return;
     setLoading(true);
@@ -638,6 +735,12 @@ export function CityView() {
           <button type="button" className="btn pulse-btn" onClick={onPulse} disabled={loading}>
             Pulse city
           </button>
+          <button type="button" className="btn cinema-btn" onClick={onCinema} disabled={loading || cinema}>
+            {cinema ? 'Cinema…' : 'Cinema'}
+          </button>
+          <button type="button" className="btn ghost" onClick={onExportAustin} disabled={loading}>
+            Export Austin
+          </button>
           <button type="button" className="btn primary" onClick={onWedgeRun} disabled={loading}>
             Run wedge
           </button>
@@ -646,7 +749,9 @@ export function CityView() {
 
       {error && <div className="city-banner error">{String(error)}</div>}
       {statusLine && <div className="city-banner ok">{statusLine}</div>}
+      {cinemaLine && <div className="city-banner cinema">{cinemaLine}</div>}
 
+      <div className={`city-stage${cinema ? ' cinema-on' : ''}`}>
       <div className="city-stats">
         <div className="stat">
           <span className="stat-value">{snapshot?.agent_count ?? 0}</span>
@@ -916,6 +1021,7 @@ export function CityView() {
             {events.length === 0 && <li className="muted">Events appear as the city works.</li>}
           </ul>
         </aside>
+      </div>
       </div>
     </div>
   );
