@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CityGraph, type GraphPulse } from './CityGraph';
+import { CityGraph, type GraphFamily, type GraphMember, type GraphPulse } from './CityGraph';
 import './CityView.css';
 
 type FamilySummary = {
@@ -11,14 +11,8 @@ type FamilySummary = {
   is_active: boolean;
 };
 
-type FamilyMember = {
-  id: string;
-  agent_id: string;
-  parent_member_id: string | null;
-  role_in_family: string;
-  role_label: string | null;
-  tool_tags: string[];
-  agent?: { agent_id: string; name: string; persona_id?: string | null } | null;
+type FamilyMember = GraphMember & {
+  tool_tags?: string[];
 };
 
 type FamilyDetail = FamilySummary & {
@@ -78,6 +72,28 @@ type WedgeResult = {
   contributions: Array<Record<string, unknown>>;
 };
 
+type CitySnapshot = {
+  families: FamilyDetail[];
+  family_count: number;
+  agent_count: number;
+  distinct_personalities: number;
+  districts: Record<string, number>;
+  events: CityEvent[];
+  target_agents: number;
+  progress: number;
+};
+
+type AwakenResult = {
+  mode: string;
+  families: number;
+  agents: number;
+  meets_hundred_bar: boolean;
+  distinct_personalities: number;
+  all_personalities_unique: boolean;
+  districts: Record<string, number>;
+  family_ids: string[];
+};
+
 const api = axios.create({ baseURL: '/api/v1', headers: { 'Content-Type': 'application/json' } });
 
 const ROLE_COLORS: Record<string, string> = {
@@ -117,12 +133,16 @@ function pulseFromEvent(ev: CityEvent): GraphPulse | null {
 export function CityView() {
   const [families, setFamilies] = useState<FamilySummary[]>([]);
   const [family, setFamily] = useState<FamilyDetail | null>(null);
+  const [snapshot, setSnapshot] = useState<CitySnapshot | null>(null);
+  const [cityMode, setCityMode] = useState(true);
   const [job, setJob] = useState<Job | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [events, setEvents] = useState<CityEvent[]>([]);
   const [pulses, setPulses] = useState<GraphPulse[]>([]);
   const [live, setLive] = useState(true);
+  const [streamMode, setStreamMode] = useState(true);
+  const [selected, setSelected] = useState<GraphMember | null>(null);
   const [goal, setGoal] = useState('Build hello.py in the commons and run it; siblings leave notes.');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -130,17 +150,60 @@ export function CityView() {
   const cursorRef = useRef<string | null>(null);
   const jobIdRef = useRef<string | null>(null);
 
+  const graphFamilies: GraphFamily[] = useMemo(() => {
+    if (cityMode && snapshot?.families?.length) {
+      return snapshot.families.map((f) => ({
+        id: f.id,
+        name: f.name,
+        default_district: f.default_district,
+        members: f.members,
+      }));
+    }
+    if (family) {
+      return [
+        {
+          id: family.id,
+          name: family.name,
+          default_district: family.default_district,
+          members: family.members,
+        },
+      ];
+    }
+    return [];
+  }, [cityMode, snapshot, family]);
+
   const agentNameById = useMemo(() => {
     const map: Record<string, string> = {};
-    for (const m of family?.members ?? []) {
-      map[m.agent_id] = m.agent?.name ?? m.role_label ?? shortId(m.agent_id);
+    for (const f of graphFamilies) {
+      for (const m of f.members) {
+        map[m.agent_id] = m.agent?.name ?? m.role_label ?? shortId(m.agent_id);
+      }
     }
     return map;
-  }, [family]);
+  }, [graphFamilies]);
 
   const loadFamilies = useCallback(async () => {
     const { data } = await api.get<FamilySummary[]>('/city/families');
     setFamilies(data);
+  }, []);
+
+  const loadSnapshot = useCallback(async () => {
+    const { data } = await api.get<CitySnapshot>('/city/snapshot');
+    setSnapshot(data);
+    if (data.events?.length) {
+      setEvents((prev) => {
+        const seen = new Set(prev.map((e) => e.id).filter(Boolean));
+        const merged = [...prev];
+        for (const ev of data.events) {
+          if (ev.id && seen.has(ev.id)) continue;
+          if (ev.id) seen.add(ev.id);
+          merged.push(ev);
+        }
+        return merged.slice(-250);
+      });
+      cursorRef.current = data.events[data.events.length - 1]?.id ?? cursorRef.current;
+    }
+    return data;
   }, []);
 
   const ingestEvents = useCallback((incoming: CityEvent[]) => {
@@ -154,10 +217,10 @@ export function CityView() {
         merged.push(ev);
         const pulse = pulseFromEvent(ev);
         if (pulse) {
-          setPulses((p) => [...p.slice(-40), pulse]);
+          setPulses((p) => [...p.slice(-80), pulse]);
         }
       }
-      return merged.slice(-200);
+      return merged.slice(-250);
     });
     const last = incoming[incoming.length - 1];
     if (last?.id) cursorRef.current = last.id;
@@ -182,31 +245,49 @@ export function CityView() {
   const selectFamily = useCallback(async (id: string) => {
     const { data } = await api.get<FamilyDetail>(`/city/families/${id}`);
     setFamily(data);
+    setCityMode(false);
     setJob(null);
     jobIdRef.current = null;
     setArtifacts([]);
     setRuns([]);
     setEvents([]);
     setPulses([]);
+    setSelected(null);
     cursorRef.current = null;
   }, []);
 
   useEffect(() => {
     loadFamilies().catch(() => setFamilies([]));
-  }, [loadFamilies]);
+    loadSnapshot().catch(() => setSnapshot(null));
+  }, [loadFamilies, loadSnapshot]);
 
-  // Live poll ≤2s (Austin-compatible /events cursor API). SSE also available at /events/stream.
+  // Live updates: prefer EventSource SSE; fall back to ≤1.5s poll
   useEffect(() => {
-    if (!live || !family?.id) return;
-    let cancelled = false;
+    if (!live) return;
+    const familyId = cityMode ? undefined : family?.id;
+    if (!cityMode && !familyId) return;
 
-    const tick = async () => {
+    let cancelled = false;
+    let es: EventSource | null = null;
+    let pollId = 0;
+
+    const applyIncoming = (incoming: CityEvent[]) => {
+      if (cancelled) return;
+      ingestEvents(incoming);
+    };
+
+    const pollTick = async () => {
       try {
-        const params: Record<string, string> = { family_id: family.id, limit: '50' };
+        const params: Record<string, string> = { limit: '50' };
+        if (familyId) params.family_id = familyId;
         if (cursorRef.current) params.after = cursorRef.current;
+        // City-wide: poll first family's stream as heartbeat + refresh snapshot lightly
+        if (!familyId && snapshot?.families?.[0]?.id) {
+          params.family_id = snapshot.families[0].id;
+        }
+        if (!params.family_id) return;
         const { data } = await api.get<{ events: CityEvent[] }>('/city/events', { params });
-        if (cancelled) return;
-        ingestEvents(data.events || []);
+        applyIncoming(data.events || []);
         if (jobIdRef.current) {
           const [arts, runRes, jobRes] = await Promise.all([
             api.get<Artifact[]>(`/city/jobs/${jobIdRef.current}/artifacts`),
@@ -220,17 +301,47 @@ export function CityView() {
           }
         }
       } catch {
-        /* keep polling */
+        /* keep live */
       }
     };
 
-    tick();
-    const id = window.setInterval(tick, 1500);
+    if (streamMode && familyId) {
+      const q = new URLSearchParams({ family_id: familyId });
+      if (cursorRef.current) q.set('after', cursorRef.current);
+      es = new EventSource(`/api/v1/city/events/stream?${q.toString()}`);
+      es.addEventListener('city', (msg) => {
+        try {
+          const data = JSON.parse((msg as MessageEvent).data) as CityEvent;
+          if (data.event_type?.startsWith('stream.')) return;
+          applyIncoming([data]);
+        } catch {
+          /* ignore bad frames */
+        }
+      });
+      es.onerror = () => {
+        es?.close();
+        es = null;
+        pollId = window.setInterval(pollTick, 1500);
+      };
+    } else {
+      pollTick();
+      pollId = window.setInterval(pollTick, 1500);
+    }
+
+    // Refresh city snapshot periodically in city mode
+    const snapId = cityMode
+      ? window.setInterval(() => {
+          loadSnapshot().catch(() => undefined);
+        }, 4000)
+      : 0;
+
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      es?.close();
+      if (pollId) window.clearInterval(pollId);
+      if (snapId) window.clearInterval(snapId);
     };
-  }, [live, family?.id, ingestEvents]);
+  }, [live, streamMode, cityMode, family?.id, snapshot?.families, ingestEvents, loadSnapshot]);
 
   const onSeed = async () => {
     setLoading(true);
@@ -241,14 +352,43 @@ export function CityView() {
         name: `Wedge City ${new Date().toLocaleTimeString()}`,
       });
       setFamily(data);
+      setCityMode(false);
       cursorRef.current = null;
       await loadFamilies();
-      const { data: ev } = await api.get<{ events: CityEvent[] }>('/city/events', {
-        params: { family_id: data.id, limit: '100' },
-      });
-      setEvents(ev.events || []);
-      if (ev.events?.length) cursorRef.current = ev.events[ev.events.length - 1].id ?? null;
+      await loadSnapshot();
       setStatusLine(`Seeded family with ${data.members.length} members — watch the graph.`);
+    } catch (err) {
+      setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onAwaken = async () => {
+    setLoading(true);
+    setError(null);
+    setStatusLine(null);
+    setCityMode(true);
+    try {
+      const { data } = await api.post<AwakenResult>('/city/scale/awaken');
+      await loadFamilies();
+      const snap = await loadSnapshot();
+      setStatusLine(
+        data.meets_hundred_bar
+          ? `City awakened — ${data.agents} agents, ${data.distinct_personalities} distinct personalities across ${data.families} families.`
+          : `Awaken finished with ${data.agents} agents (target 100).`,
+      );
+      if (snap?.events?.length) {
+        const now = Date.now();
+        setPulses(
+          snap.events
+            .map((e, i) => {
+              const p = pulseFromEvent(e);
+              return p ? { ...p, at: now - (snap.events.length - i) * 40 } : null;
+            })
+            .filter(Boolean) as GraphPulse[],
+        );
+      }
     } catch (err) {
       setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
     } finally {
@@ -264,7 +404,7 @@ export function CityView() {
       const { data } = await api.post<Job>('/city/jobs', {
         family_id: family.id,
         goal,
-        district: 'build',
+        district: family.default_district || 'build',
       });
       setJob(data);
       jobIdRef.current = data.id;
@@ -287,6 +427,7 @@ export function CityView() {
         goal,
       });
       setFamily(data.family);
+      setCityMode(false);
       setJob(data.job);
       jobIdRef.current = data.job.id;
       setArtifacts(data.artifacts);
@@ -305,6 +446,7 @@ export function CityView() {
         );
       }
       await loadFamilies();
+      await loadSnapshot();
       setStatusLine(
         data.success
           ? 'Wedge demo succeeded — graph pulses show who built and ran.'
@@ -317,14 +459,16 @@ export function CityView() {
     }
   };
 
+  const progressPct = Math.round((snapshot?.progress ?? 0) * 100);
+
   return (
     <div className="city-view">
       <header className="city-header">
         <div>
-          <h1>City</h1>
+          <h1>Persola City</h1>
           <p className="city-sub">
-            Living agent society — lineage graph, shared commons, build/run pulses. Event stream for
-            Austin: <code>/api/v1/city/events</code>.
+            Living society of distinct personalities — districts, families, build/run pulses. Austin
+            stream: <code>/api/v1/city/events/stream</code>
           </p>
         </div>
         <div className="city-actions">
@@ -332,17 +476,52 @@ export function CityView() {
             <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
             Live
           </label>
+          <label className="live-toggle">
+            <input
+              type="checkbox"
+              checked={streamMode}
+              onChange={(e) => setStreamMode(e.target.checked)}
+            />
+            SSE
+          </label>
+          <button type="button" className="btn ghost" onClick={() => setCityMode(true)} disabled={loading}>
+            City view
+          </button>
           <button type="button" className="btn ghost" onClick={onSeed} disabled={loading}>
             Seed family
           </button>
+          <button type="button" className="btn accent" onClick={onAwaken} disabled={loading}>
+            {loading ? 'Awakening…' : 'Awaken 100'}
+          </button>
           <button type="button" className="btn primary" onClick={onWedgeRun} disabled={loading}>
-            {loading ? 'Running…' : 'Run wedge demo'}
+            Run wedge
           </button>
         </div>
       </header>
 
       {error && <div className="city-banner error">{String(error)}</div>}
       {statusLine && <div className="city-banner ok">{statusLine}</div>}
+
+      <div className="city-stats">
+        <div className="stat">
+          <span className="stat-value">{snapshot?.agent_count ?? 0}</span>
+          <span className="stat-label">agents</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">{snapshot?.family_count ?? 0}</span>
+          <span className="stat-label">families</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">{snapshot?.distinct_personalities ?? 0}</span>
+          <span className="stat-label">personalities</span>
+        </div>
+        <div className="stat progress-stat">
+          <div className="progress-track">
+            <div className="progress-fill" style={{ width: `${progressPct}%` }} />
+          </div>
+          <span className="stat-label">{progressPct}% to 100</span>
+        </div>
+      </div>
 
       <div className="city-layout">
         <aside className="city-sidebar">
@@ -352,7 +531,7 @@ export function CityView() {
               <li key={f.id}>
                 <button
                   type="button"
-                  className={family?.id === f.id ? 'active' : ''}
+                  className={family?.id === f.id && !cityMode ? 'active' : ''}
                   onClick={() => selectFamily(f.id)}
                 >
                   <span>{f.name}</span>
@@ -360,156 +539,208 @@ export function CityView() {
                 </button>
               </li>
             ))}
-            {families.length === 0 && <li className="muted">No families yet — seed one.</li>}
+            {families.length === 0 && <li className="muted">No families yet — awaken or seed.</li>}
           </ul>
         </aside>
 
         <section className="city-main">
           <div className="panel graph-panel">
             <div className="panel-head">
-              <h2>Lineage graph {family ? `· ${family.name}` : ''}</h2>
-              {family && <span className="pill">{family.members.length} agents</span>}
+              <h2>
+                {cityMode
+                  ? 'Living city · districts'
+                  : `Lineage · ${family?.name ?? 'family'}`}
+              </h2>
+              <span className="pill">
+                {graphFamilies.reduce((n, f) => n + f.members.length, 0)} agents
+              </span>
             </div>
-            <CityGraph members={family?.members ?? []} pulses={pulses} />
-          </div>
-
-          <div className="panel">
-            <div className="panel-head">
-              <h2>Roster</h2>
-            </div>
-            {!family && <p className="muted">Select or seed a family to see lineage.</p>}
-            {family && (
-              <div className="roster-grid">
-                {family.members.map((m) => (
-                  <article
-                    key={m.id}
-                    className="roster-card"
-                    style={{ borderTopColor: roleColor(m.role_label || m.role_in_family) }}
-                  >
-                    <h3>{m.agent?.name ?? 'Agent'}</h3>
-                    <div className="role-tag">{m.role_label || m.role_in_family}</div>
-                    <div className="meta">
-                      {m.role_in_family}
-                      {m.parent_member_id ? ` · child of ${shortId(m.parent_member_id)}` : ' · root'}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="panel">
-            <div className="panel-head">
-              <h2>Job</h2>
-              {job && <span className={`pill status-${job.status}`}>{job.status}</span>}
-            </div>
-            <label className="goal-label" htmlFor="city-goal">
-              Goal
-            </label>
-            <textarea
-              id="city-goal"
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              rows={3}
+            <CityGraph
+              families={graphFamilies}
+              pulses={pulses}
+              selectedAgentId={selected?.agent_id ?? null}
+              onSelectAgent={setSelected}
+              height={cityMode ? 560 : 320}
             />
-            <div className="row-actions">
-              <button type="button" className="btn ghost" onClick={onStartJob} disabled={!family || loading}>
-                Start job only
-              </button>
-              <button type="button" className="btn primary" onClick={onWedgeRun} disabled={loading}>
-                Build & run (wedge)
-              </button>
-            </div>
-            {job && (
-              <p className="job-meta">
-                {job.goal}
-                <br />
-                <span className="muted">
-                  job {shortId(job.id)} · artifacts {job.artifact_count ?? artifacts.length} · runs{' '}
-                  {job.run_count ?? runs.length}
-                </span>
-              </p>
-            )}
           </div>
 
-          <div className="split">
-            <div className="panel">
-              <h2>Artifacts</h2>
-              <table className="city-table">
-                <thead>
-                  <tr>
-                    <th>Path</th>
-                    <th>By</th>
-                    <th>Ver</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {artifacts.map((a) => (
-                    <tr key={a.id}>
-                      <td>
-                        <code>{a.path}</code>
-                      </td>
-                      <td>{agentNameById[a.created_by_agent_id ?? ''] ?? shortId(a.created_by_agent_id)}</td>
-                      <td>{a.version}</td>
-                    </tr>
+          {selected && (
+            <div className="panel inspect-panel">
+              <div className="panel-head">
+                <h2>Inspect</h2>
+                <button type="button" className="btn ghost" onClick={() => setSelected(null)}>
+                  Clear
+                </button>
+              </div>
+              <div className="inspect-grid">
+                <div>
+                  <h3>{selected.agent?.name ?? 'Agent'}</h3>
+                  <div className="role-tag" style={{ borderColor: roleColor(selected.role_label) }}>
+                    {selected.role_label || selected.role_in_family}
+                  </div>
+                  <p className="muted">
+                    {selected.district ?? '—'} · fingerprint{' '}
+                    {selected.personality?.fingerprint ?? '—'}
+                  </p>
+                </div>
+                <div className="trait-bars">
+                  {(selected.personality?.top_traits ?? Object.entries(selected.knob_overrides ?? {}).map(([knob, value]) => ({ knob, value }))).slice(0, 6).map((t) => (
+                    <div key={t.knob} className="trait-bar">
+                      <span>{t.knob}</span>
+                      <div className="bar-track">
+                        <div className="bar-fill" style={{ width: `${Math.round(t.value * 100)}%` }} />
+                      </div>
+                      <span>{(t.value * 100).toFixed(0)}</span>
+                    </div>
                   ))}
-                  {artifacts.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="muted">
-                        No artifacts yet
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                </div>
+              </div>
             </div>
+          )}
 
-            <div className="panel">
-              <h2>Runs</h2>
-              <table className="city-table">
-                <thead>
-                  <tr>
-                    <th>Tool</th>
-                    <th>By</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {runs.map((r) => (
-                    <tr key={r.id}>
-                      <td>{r.tool}</td>
-                      <td>{agentNameById[r.started_by_agent_id ?? ''] ?? shortId(r.started_by_agent_id)}</td>
-                      <td>
-                        <span className={`pill status-${r.status}`}>{r.status}</span>
-                      </td>
-                    </tr>
-                  ))}
-                  {runs.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="muted">
-                        No runs yet
-                      </td>
-                    </tr>
+          {!cityMode && (
+            <>
+              <div className="panel">
+                <div className="panel-head">
+                  <h2>Roster</h2>
+                </div>
+                {!family && <p className="muted">Select or seed a family to see lineage.</p>}
+                {family && (
+                  <div className="roster-grid">
+                    {family.members.map((m) => (
+                      <article
+                        key={m.id}
+                        className={`roster-card${selected?.id === m.id ? ' selected' : ''}`}
+                        style={{ borderTopColor: roleColor(m.role_label || m.role_in_family) }}
+                        onClick={() => setSelected(m)}
+                      >
+                        <h3>{m.agent?.name ?? 'Agent'}</h3>
+                        <div className="role-tag">{m.role_label || m.role_in_family}</div>
+                        <div className="meta">
+                          {m.personality?.fingerprint
+                            ? `fp ${m.personality.fingerprint}`
+                            : m.role_in_family}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="panel">
+                <div className="panel-head">
+                  <h2>Job</h2>
+                  {job && <span className={`pill status-${job.status}`}>{job.status}</span>}
+                </div>
+                <label className="goal-label" htmlFor="city-goal">
+                  Goal
+                </label>
+                <textarea
+                  id="city-goal"
+                  value={goal}
+                  onChange={(e) => setGoal(e.target.value)}
+                  rows={3}
+                />
+                <div className="row-actions">
+                  <button type="button" className="btn ghost" onClick={onStartJob} disabled={!family || loading}>
+                    Start job only
+                  </button>
+                  <button type="button" className="btn primary" onClick={onWedgeRun} disabled={loading}>
+                    Build & run (wedge)
+                  </button>
+                </div>
+                {job && (
+                  <p className="job-meta">
+                    {job.goal}
+                    <br />
+                    <span className="muted">
+                      job {shortId(job.id)} · artifacts {job.artifact_count ?? artifacts.length} · runs{' '}
+                      {job.run_count ?? runs.length}
+                    </span>
+                  </p>
+                )}
+              </div>
+
+              <div className="split">
+                <div className="panel">
+                  <h2>Artifacts</h2>
+                  <table className="city-table">
+                    <thead>
+                      <tr>
+                        <th>Path</th>
+                        <th>By</th>
+                        <th>Ver</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {artifacts.map((a) => (
+                        <tr key={a.id}>
+                          <td>
+                            <code>{a.path}</code>
+                          </td>
+                          <td>{agentNameById[a.created_by_agent_id ?? ''] ?? shortId(a.created_by_agent_id)}</td>
+                          <td>{a.version}</td>
+                        </tr>
+                      ))}
+                      {artifacts.length === 0 && (
+                        <tr>
+                          <td colSpan={3} className="muted">
+                            No artifacts yet
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="panel">
+                  <h2>Runs</h2>
+                  <table className="city-table">
+                    <thead>
+                      <tr>
+                        <th>Tool</th>
+                        <th>By</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {runs.map((r) => (
+                        <tr key={r.id}>
+                          <td>{r.tool}</td>
+                          <td>{agentNameById[r.started_by_agent_id ?? ''] ?? shortId(r.started_by_agent_id)}</td>
+                          <td>
+                            <span className={`pill status-${r.status}`}>{r.status}</span>
+                          </td>
+                        </tr>
+                      ))}
+                      {runs.length === 0 && (
+                        <tr>
+                          <td colSpan={3} className="muted">
+                            No runs yet
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                  {runs.some((r) => r.stdout) && (
+                    <pre className="stdout">
+                      {runs
+                        .filter((r) => r.status === 'succeeded' && r.stdout)
+                        .map((r) => r.stdout)
+                        .join('\n')}
+                    </pre>
                   )}
-                </tbody>
-              </table>
-              {runs.some((r) => r.stdout) && (
-                <pre className="stdout">
-                  {runs
-                    .filter((r) => r.status === 'succeeded' && r.stdout)
-                    .map((r) => r.stdout)
-                    .join('\n')}
-                </pre>
-              )}
-            </div>
-          </div>
+                </div>
+              </div>
+            </>
+          )}
         </section>
 
         <aside className="city-events">
           <h2>Live events</h2>
           <ul className="event-feed">
             {[...events].reverse().map((e, idx) => (
-              <li key={e.id ?? `${e.event_type}-${idx}`}>
+              <li key={e.id ?? `${e.event_type}-${idx}`} className={`ev-${e.event_type.replace('.', '-')}`}>
                 <div className="event-type">{e.event_type}</div>
                 <div className="muted">{e.created_at ? new Date(e.created_at).toLocaleTimeString() : ''}</div>
               </li>

@@ -82,6 +82,15 @@ export const sessionsApi = {
 export const cityApi = {
   listFamilies: () => api.get('/city/families'),
   getFamily: (id: string) => api.get(`/city/families/${id}`),
+  snapshot: () => api.get('/city/snapshot'),
+  awaken: () => api.post('/city/scale/awaken'),
+  scaleProbe: (body: {
+    mode?: 'fifty' | 'hundred';
+    families?: number;
+    agents_per_family?: number;
+    run_jobs?: boolean;
+    name_prefix?: string;
+  } = {}) => api.post('/city/scale/probe', body),
   seedWedge: (name?: string) => api.post('/city/wedge/seed', { name: name ?? 'Wedge City Family' }),
   runWedge: (body: { family_id?: string; goal?: string; family_name?: string } = {}) =>
     api.post('/city/wedge/run', body),

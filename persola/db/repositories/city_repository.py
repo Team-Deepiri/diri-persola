@@ -25,11 +25,15 @@ class FamilyRepository(BaseRepository[FamilyModel]):
 		super().__init__(session, FamilyModel)
 
 	async def get_with_members(self, family_id: UUID) -> FamilyModel | None:
+		from ..models import AgentModel
+
 		query = (
 			select(FamilyModel)
 			.where(FamilyModel.id == family_id)
 			.options(
-				selectinload(FamilyModel.members).selectinload(FamilyMemberModel.agent),
+				selectinload(FamilyModel.members)
+				.selectinload(FamilyMemberModel.agent)
+				.selectinload(AgentModel.persona),
 			)
 		)
 		result = await self.session.execute(query)
@@ -168,6 +172,18 @@ class CityEventRepository(BaseRepository[CityEventModel]):
 		)
 		result = await self.session.execute(query)
 		return list(result.scalars().all())
+
+	async def list_recent(self, limit: int = 100) -> list[CityEventModel]:
+		"""City-wide recent events (newest first) for snapshot viz."""
+		query = (
+			select(CityEventModel)
+			.order_by(CityEventModel.created_at.desc())
+			.limit(limit)
+		)
+		result = await self.session.execute(query)
+		rows = list(result.scalars().all())
+		rows.reverse()  # chronological for feed consumers
+		return rows
 
 	async def list_since(
 		self,

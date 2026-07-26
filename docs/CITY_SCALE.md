@@ -80,15 +80,21 @@ No-ops with `configured: false` when Cyrex env is unset.
 ```http
 POST /api/v1/city/scale/probe
 {
-  "families": 5,
-  "agents_per_family": 10,
+  "mode": "fifty",
   "run_jobs": true
 }
 ```
 
-Exit bar: **≥5 families and ≥50 agents**, each family optionally runs a tiny write+run job.
+Phase 5 exit bar: **≥5 families and ≥50 agents**.
 
 ```http
+POST /api/v1/city/scale/awaken
+```
+
+Phase 6: **10×10 = 100 agents** with unique personality fingerprints across districts.
+
+```http
+GET /api/v1/city/snapshot
 GET /api/v1/city/scale/status
 GET /api/v1/city/scale/path
 ```

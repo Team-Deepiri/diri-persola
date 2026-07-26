@@ -335,6 +335,7 @@
 .city-pulse {
   opacity: 0.85;
   transform-origin: center;
+  transform-box: fill-box;
   animation: cityPulse 1.4s ease-out infinite;
 }
 
@@ -352,20 +353,178 @@
   stroke-dasharray: 4 3;
 }
 
-@keyframes cityPulse {
-  0% {
-    r: 24;
-    opacity: 0.9;
-  }
-  100% {
-    r: 42;
-    opacity: 0;
-  }
-}
-
 .city-sub code {
   font-size: 0.78rem;
   background: #e2e8f0;
   padding: 1px 6px;
   border-radius: 4px;
+}
+
+.btn.accent {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: #fff;
+}
+
+.city-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 800px) {
+  .city-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.stat {
+  background: linear-gradient(145deg, #0f172a 0%, #1e293b 100%);
+  color: #f8fafc;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.75;
+}
+
+.progress-stat .progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.15);
+  overflow: hidden;
+  margin: 8px 0 6px;
+}
+
+.progress-stat .progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #14b8a6, #a78bfa);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.city-graph-wrap {
+  position: relative;
+}
+
+.city-graph.interactive {
+  min-height: 280px;
+}
+
+.district-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.city-node-group.hovered .city-node,
+.city-node-group.selected .city-node {
+  stroke: #0f172a;
+  stroke-width: 2.5;
+}
+
+.city-tooltip {
+  position: absolute;
+  transform: translate(-50%, -120%);
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  pointer-events: none;
+  z-index: 5;
+  min-width: 140px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.35);
+}
+
+.city-tooltip .trait {
+  opacity: 0.85;
+  margin-top: 2px;
+}
+
+.inspect-panel {
+  background: linear-gradient(120deg, #ecfeff 0%, #f5f3ff 100%);
+}
+
+.inspect-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 16px;
+}
+
+@media (max-width: 800px) {
+  .inspect-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.trait-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.trait-bar {
+  display: grid;
+  grid-template-columns: 110px 1fr 36px;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.78rem;
+}
+
+.bar-track {
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #0f766e, #7c3aed);
+}
+
+.roster-card {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.roster-card:hover,
+.roster-card.selected {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+
+.roster-card.selected {
+  outline: 2px solid #0f766e;
+}
+
+@keyframes cityPulse {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.85);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.55);
+  }
+}
+
+.city-pulse {
+  transform-box: fill-box;
+  transform-origin: center;
 }

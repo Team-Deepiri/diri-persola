@@ -22,6 +22,8 @@ Phase 3  Wedge demo (one family, one job, City UI mode)
 Phase 4  City visualization + Austin event contract
     │
 Phase 5  Scale toward ~100 agents (workers, districts, metrics)
+    │
+Phase 6  Prove 100+ distinct personalities + interactive city viz
 ```
 
 ---
@@ -214,6 +216,34 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8b. Phase 6 — Prove 100 + interactive visualization
+
+**Goal:** A living city of **≥100 agents with unique personalities**, observable through an interactive district graph.
+
+### 8b.1 Scale awaken
+
+| Deliverable | Notes |
+|-------------|-------|
+| Distinct personalities | `city_personalities.py` — archetype baselines + index salts → unique fingerprints |
+| `POST /api/v1/city/scale/awaken` | 10 families × 10 agents across build/viz/research/ops |
+| `POST /api/v1/city/scale/probe` `mode=hundred` | Same as awaken; `mode=fifty` keeps Phase 5 bar |
+| `GET /api/v1/city/snapshot` | Multi-family payload for the city UI |
+
+### 8b.2 Interactive viz
+
+| Deliverable | Notes |
+|-------------|-------|
+| District city graph | Four columns; family clusters; click-to-inspect personality traits |
+| Live SSE | City UI prefers `EventSource` on `/events/stream` with poll fallback |
+| Awaken control | **Awaken 100** button + progress to target |
+
+### 8b.3 Exit criteria
+
+- Probe reports `meets_hundred_bar` and `all_personalities_unique`.
+- UI shows district layout, selectable agents with trait bars, live pulses.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -268,6 +298,7 @@ docs/
 - [x] **P3** Wedge demo: one family builds and runs; UI City mode
 - [x] **P4** City graph + live events; Austin contract documented
 - [x] **P5** Scale path to ~100 with workers/districts/metrics
+- [x] **P6** Prove ≥100 distinct personalities + interactive city visualization
 
 ---
 

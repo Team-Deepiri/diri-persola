@@ -39,7 +39,8 @@ class ScaleConfig:
 	target_agents: int = 100
 	probe_families: int = 5
 	probe_agents_per_family: int = 10  # 5 × 10 = 50 sustained probe
-
+	hundred_families: int = 10
+	hundred_agents_per_family: int = 10  # Phase 6 awaken: 10 × 10 = 100
 
 DISTRICTS: tuple[str, ...] = ("build", "viz", "research", "ops")
 

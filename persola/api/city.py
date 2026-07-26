@@ -104,8 +104,9 @@ class WedgeRunRequest(BaseModel):
 
 
 class ScaleProbeRequest(BaseModel):
-	families: int = Field(default=5, ge=1, le=20)
-	agents_per_family: int = Field(default=10, ge=2, le=25)
+	mode: str = Field(default="fifty", pattern="^(fifty|hundred)$")
+	families: Optional[int] = Field(default=None, ge=1, le=20)
+	agents_per_family: Optional[int] = Field(default=None, ge=2, le=25)
 	name_prefix: str = Field(default="ScaleProbe", min_length=1, max_length=64)
 	run_jobs: bool = True
 
@@ -507,6 +508,16 @@ async def stream_city_events(
 	)
 
 
+@router.get("/snapshot")
+async def city_snapshot(
+	event_limit: int = 80,
+	db: AsyncSession = Depends(get_db),
+):
+	"""Multi-family city snapshot for interactive visualization (Phase 6)."""
+	service = CityService(db)
+	return await service.city_snapshot(event_limit=min(max(event_limit, 1), 200))
+
+
 @router.get("/scale/status")
 async def city_scale_status():
 	"""Worker pool + concurrency governor snapshot (Phase 5)."""
@@ -533,6 +544,11 @@ async def city_scale_path():
 			"agents_per_family": cfg.probe_agents_per_family,
 			"total": cfg.probe_families * cfg.probe_agents_per_family,
 		},
+		"hundred_default": {
+			"families": cfg.hundred_families,
+			"agents_per_family": cfg.hundred_agents_per_family,
+			"total": cfg.hundred_families * cfg.hundred_agents_per_family,
+		},
 		"bottlenecks": [
 			{
 				"name": "LLM cost/latency",
@@ -540,7 +556,7 @@ async def city_scale_path():
 			},
 			{
 				"name": "Tool execution fan-out",
-				"mitigation": "CityWorkerPool + ConcurrencyGovernor (global / family / district caps)",
+				"mitigation": "CityWorkerPool + ConcurrencyGovernor (global / family / district / job caps)",
 			},
 			{
 				"name": "District hot spots",
@@ -554,6 +570,10 @@ async def city_scale_path():
 				"name": "Runtime spawn",
 				"mitigation": "Optional Cyrex bulk sync when families leave Persola",
 			},
+			{
+				"name": "Personality uniqueness",
+				"mitigation": "Phase 6 distinct fingerprints via city_personalities (archetype + index salt)",
+			},
 		],
 		"config": GLOBAL_GOVERNOR.snapshot()["config"],
 	}
@@ -565,7 +585,7 @@ async def city_scale_probe(
 	db: AsyncSession = Depends(get_db),
 	_rl: None = Depends(_city_rate_limit),
 ):
-	"""Create ≥5 families totaling ≥50 agents and optionally run probe jobs."""
+	"""Create probe families (mode=fifty ≥50 or mode=hundred ≥100) with distinct personalities."""
 	service = CityService(db)
 	try:
 		return await service.scale_probe(
@@ -573,6 +593,25 @@ async def city_scale_probe(
 			agents_per_family=body.agents_per_family,
 			name_prefix=body.name_prefix,
 			run_jobs=body.run_jobs,
+			mode=body.mode,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/scale/awaken")
+async def city_scale_awaken(
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Phase 6: awaken a 100-agent city (10 families × 10) with unique personalities."""
+	service = CityService(db)
+	try:
+		return await service.scale_probe(
+			mode="hundred",
+			name_prefix="Awaken",
+			run_jobs=True,
 		)
 	except ValueError as exc:
 		await db.rollback()

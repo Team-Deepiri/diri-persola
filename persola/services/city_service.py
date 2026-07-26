@@ -91,7 +91,18 @@ class CityService:
 		return await self.events.create(event)
 
 	def _serialize_member(self, member: FamilyMemberModel) -> dict[str, Any]:
+		from ..orchestration.city_personalities import personality_fingerprint
+
 		agent = member.agent
+		knobs = dict(member.knob_overrides or {})
+		# Prefer full persona knobs when loaded (richer viz fingerprints)
+		if agent is not None and getattr(agent, "persona", None) is not None:
+			try:
+				knobs = {**agent.persona.knob_values(), **knobs}
+			except Exception:
+				pass
+		fp = personality_fingerprint(knobs) if knobs else None
+		top = sorted(knobs.items(), key=lambda kv: abs(float(kv[1]) - 0.5), reverse=True)[:5]
 		return {
 			"id": str(member.id),
 			"family_id": str(member.family_id),
@@ -100,6 +111,10 @@ class CityService:
 			"role_in_family": member.role_in_family,
 			"role_label": member.role_label,
 			"knob_overrides": member.knob_overrides or {},
+			"personality": {
+				"fingerprint": fp,
+				"top_traits": [{"knob": k, "value": float(v)} for k, v in top],
+			},
 			"tool_tags": list(member.tool_tags or []),
 			"is_active": member.is_active,
 			"agent": {
@@ -107,6 +122,7 @@ class CityService:
 				"name": agent.name,
 				"role": agent.role,
 				"persona_id": str(agent.persona_id) if agent.persona_id else None,
+				"model": agent.model,
 				"tools": list(agent.tools or []),
 			}
 			if agent is not None
@@ -228,12 +244,18 @@ class CityService:
 		persona_id: UUID | None = None,
 		tool_tags: list[str] | None = None,
 		role_label: str | None = "coordinator",
+		parent_knob_overrides: dict[str, float] | None = None,
 	) -> dict[str, Any]:
 		if default_district not in {d.value for d in CityDistrict}:
 			raise ValueError(f"Invalid district: {default_district}")
 
 		tags = list(tool_tags) if tool_tags is not None else list(DEFAULT_CITY_TOOL_TAGS)
 		parent_agent: AgentModel | None = None
+		parent_overrides = {
+			k: _clamp_knob(v)
+			for k, v in (parent_knob_overrides or {}).items()
+			if k in PERSONA_KNOB_FIELDS
+		}
 
 		if parent_agent_id is not None:
 			parent_agent = await self.agents.get(parent_agent_id)
@@ -246,6 +268,7 @@ class CityService:
 					PersonaModel(
 						name=f"{name} Parent Persona",
 						description=description or f"Parent persona for family {name}",
+						**{field: parent_overrides.get(field, 0.5) for field in PERSONA_KNOB_FIELDS},
 					)
 				)
 				resolved_persona_id = persona.id
@@ -253,6 +276,9 @@ class CityService:
 				persona = await self.personas.get(resolved_persona_id)
 				if persona is None:
 					raise ValueError("persona_id not found")
+				if parent_overrides:
+					for field, value in parent_overrides.items():
+						setattr(persona, field, value)
 
 			profile = persona.to_profile()
 			parent_model = self.model_tiers.for_role("parent", role_label)
@@ -288,7 +314,7 @@ class CityService:
 				parent_member_id=None,
 				role_in_family=FamilyMemberRole.PARENT.value,
 				role_label=role_label,
-				knob_overrides={},
+				knob_overrides=parent_overrides,
 				tool_tags=tags,
 				is_active=True,
 			)
@@ -1049,40 +1075,61 @@ class CityService:
 		agents_per_family: int | None = None,
 		name_prefix: str = "ScaleProbe",
 		run_jobs: bool = True,
+		mode: str = "fifty",
 	) -> dict[str, Any]:
 		"""
-		Sustained probe: create ≥5 families × N agents (default 50 total) and
-		optionally run a tiny build+run job per family.
+		Sustained probe: create families × agents (Phase 5: ≥50; Phase 6: ≥100)
+		with distinct personalities, optionally run a tiny build+run job per family.
 		"""
+		from ..orchestration.city_personalities import distinct_child_personality, parent_personality
+
 		cfg = DEFAULT_SCALE_CONFIG
-		n_families = max(1, families if families is not None else cfg.probe_families)
-		per_family = max(2, agents_per_family if agents_per_family is not None else cfg.probe_agents_per_family)
+		mode_l = (mode or "fifty").lower().strip()
+		if mode_l == "hundred":
+			default_families = cfg.hundred_families
+			default_per = cfg.hundred_agents_per_family
+		else:
+			default_families = cfg.probe_families
+			default_per = cfg.probe_agents_per_family
+
+		n_families = max(1, families if families is not None else default_families)
+		per_family = max(2, agents_per_family if agents_per_family is not None else default_per)
 		# per_family includes parent, so children = per_family - 1
 		children = max(1, per_family - 1)
 
 		created_families: list[dict[str, Any]] = []
 		jobs: list[dict[str, Any]] = []
 		total_agents = 0
+		fingerprints: set[str] = set()
 
 		for i in range(n_families):
 			district = ("build", "viz", "research", "ops")[i % 4]
+			parent_p = parent_personality(family_index=i)
 			family = await self.create_family(
 				name=f"{name_prefix}-{i + 1}",
-				description=f"Phase 5 scale probe family {i + 1}",
+				description=f"Phase 6 scale probe family {i + 1} ({district})",
 				default_district=district,
 				parent_name=f"{name_prefix} Parent {i + 1}",
-				role_label="coordinator",
-				policy={"scale_probe": True, "shard": f"district:{district}"},
+				role_label=parent_p["role_label"],
+				parent_knob_overrides=parent_p["knob_overrides"],
+				policy={
+					"scale_probe": True,
+					"mode": mode_l,
+					"shard": f"district:{district}",
+					"parent_fingerprint": parent_p["fingerprint"],
+				},
 			)
+			fingerprints.add(parent_p["fingerprint"])
 			fid = UUID(family["id"])
 			for c in range(children):
-				role = ("analyst", "creative", "executor", "empath", "builder")[c % 5]
+				child_p = distinct_child_personality(child_index=c, family_index=i)
 				await self.spawn_child(
 					fid,
-					name=f"{name_prefix}-{i + 1}-C{c + 1}",
-					role_label=role,
-					knob_overrides={"creativity": 0.4 + (c % 5) * 0.1},
+					name=f"{name_prefix}-{i + 1}-{child_p['role_label'][:3].upper()}{c + 1}",
+					role_label=child_p["role_label"],
+					knob_overrides=child_p["knob_overrides"],
 				)
+				fingerprints.add(child_p["fingerprint"])
 			detail = await self.get_family(fid)
 			assert detail is not None
 			created_families.append(detail)
@@ -1132,12 +1179,20 @@ class CityService:
 			pass
 
 		return {
+			"mode": mode_l,
 			"families": len(created_families),
 			"agents": total_agents,
 			"jobs": len(jobs),
 			"family_ids": [f["id"] for f in created_families],
 			"job_ids": [j["id"] for j in jobs if j],
 			"meets_probe_bar": total_agents >= 50 and len(created_families) >= 5,
+			"meets_hundred_bar": total_agents >= 100 and len(created_families) >= 8,
+			"distinct_personalities": len(fingerprints),
+			"all_personalities_unique": len(fingerprints) == total_agents,
+			"districts": {
+				d: sum(1 for f in created_families if f.get("default_district") == d)
+				for d in ("build", "viz", "research", "ops")
+			},
 			"model_tiers": {
 				"parent": self.model_tiers.parent,
 				"child": self.model_tiers.child,
@@ -1145,8 +1200,48 @@ class CityService:
 			"path_to_100": {
 				"current_agents": total_agents,
 				"target": cfg.target_agents,
-				"next": "raise workers + per-family concurrency; shard by district; keep child models cheap",
+				"next": (
+					"city awakened"
+					if total_agents >= cfg.target_agents
+					else "POST /scale/probe mode=hundred (10×10) with distinct personalities"
+				),
 			},
+		}
+
+	async def city_snapshot(self, *, event_limit: int = 80) -> dict[str, Any]:
+		"""Multi-family city view for interactive visualization (Phase 6)."""
+		summaries = await self.list_families()
+		families: list[dict[str, Any]] = []
+		agents = 0
+		fingerprints: set[str] = set()
+		by_district: dict[str, int] = {d: 0 for d in ("build", "viz", "research", "ops")}
+
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			families.append(detail)
+			agents += len(detail.get("members") or [])
+			district = detail.get("default_district") or "build"
+			by_district[district] = by_district.get(district, 0) + 1
+			for m in detail.get("members") or []:
+				fp = (m.get("personality") or {}).get("fingerprint")
+				if fp:
+					fingerprints.add(fp)
+
+		# Recent city-wide events
+		event_rows = await self.events.list_recent(limit=event_limit)
+		events = [self._serialize_event(r) for r in event_rows]
+
+		return {
+			"families": families,
+			"family_count": len(families),
+			"agent_count": agents,
+			"distinct_personalities": len(fingerprints),
+			"districts": by_district,
+			"events": events,
+			"target_agents": DEFAULT_SCALE_CONFIG.target_agents,
+			"progress": min(1.0, agents / max(1, DEFAULT_SCALE_CONFIG.target_agents)),
 		}
 
 	async def bulk_cyrex_sync(self, family_id: UUID) -> dict[str, Any]:
