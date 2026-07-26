@@ -91,6 +91,14 @@ export const cityApi = {
     name_prefix?: string;
     multi_contributor?: boolean;
   } = {}) => api.post('/city/pulse', body),
+  conduct: (body: {
+    max_families?: number;
+    districts?: string[];
+    use_llm?: boolean;
+    use_langgraph?: boolean;
+    auto_merge?: boolean;
+    task_template?: string;
+  } = {}) => api.post('/city/conduct', body),
   heartbeat: () => api.get('/city/heartbeat'),
   heartbeatTick: () => api.post('/city/heartbeat/tick'),
   exportAustin: () => api.get('/city/export/austin'),

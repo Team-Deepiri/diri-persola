@@ -25,6 +25,8 @@ ALLOWED_VIZ_EVENT_TYPES = frozenset(
 		"cohesion.veto",
 		"city.pulse.started",
 		"city.pulse.finished",
+		"city.conduct.started",
+		"city.conduct.finished",
 		"viz.pulse",
 		"viz.custom",
 	}

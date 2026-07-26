@@ -1,6 +1,6 @@
 # Persola Communal City — Full Implementation Roadmap
 
-**Status:** Implemented (Phases 0–5)  
+**Status:** Implemented (Phases 0–10)  
 **Depends on:** [COMMUNAL_CITY_DESIGN.md](./COMMUNAL_CITY_DESIGN.md)  
 **Baseline:** Persola personality engine + team orchestration (LangGraph, Team Workbench) already in repo
 
@@ -30,6 +30,8 @@ Phase 7  City pulse — multi-district work + parent cohesion gate
 Phase 8  Living heartbeat — multi-contributor pulse + auto-tick
     │
 Phase 9  Austin export pack + disk commons + cinema demo
+    │
+Phase 10 City conductor — LLM team-invoke across families
 ```
 
 ---
@@ -305,6 +307,24 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8f. Phase 10 — City conductor
+
+**Goal:** Cognitive conduction — families don’t only run scripted tools; when an LLM is available, TeamOrchestrator plans/builds against the commons.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `POST /api/v1/city/conduct` | Conduct N families; `use_llm` prefers TeamOrchestrator |
+| Tool fallback | If no LLM, multi-contributor pulse tools still run (CI-safe) |
+| Events | `city.conduct.started` / `city.conduct.finished` |
+| UI **Conduct** | One-click conductor from City view |
+
+### 8f.1 Exit criteria
+
+- Conduct without LLM reports `mode=tools` and completes merge/veto.
+- Conduct with stub/real LLM emits conduct events and returns team payload.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -363,14 +383,15 @@ docs/
 - [x] **P7** City pulse + parent cohesion merge/veto + district filters
 - [x] **P8** Living heartbeat — multi-contributor pulse + auto-tick
 - [x] **P9** Austin export pack + disk commons mirror + cinema demo
+- [x] **P10** City conductor — LLM team-invoke / tool fallback across families
 
 ---
 
 ## 13. Immediate next implementation step
 
-After these docs land:
+Phases 0–10 are implemented on the communal-city branch. Remaining:
 
-1. Alembic migration for city tables (Phase 1).
-2. `city_service` + `/api/v1/city` routes.
-3. `city_tools.py` sandbox handlers wired into team/city job invoke (Phase 2).
-4. Thin City mode on Team Workbench to prove build+run end-to-end (Phase 3).
+1. Refresh PR #46 body to match Phases 1–10 (not Phase 1-only).
+2. Consolidate dual ORM (`tables.py` → `models.py`) — see [SCHEMA_INTEGRATION_REBRAND_MAP.md](./SCHEMA_INTEGRATION_REBRAND_MAP.md).
+3. Production WSGI/ASGI hardening + real Cyrex bulk sync in staging.
+4. Austin consume `GET /city/export/austin` against live event feed.

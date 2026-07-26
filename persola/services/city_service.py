@@ -1396,6 +1396,171 @@ class CityService:
 			},
 		}
 
+	async def conduct_city(
+		self,
+		*,
+		max_families: int = 4,
+		districts: list[str] | None = None,
+		task_template: str | None = None,
+		llm_fn=None,
+		use_langgraph: bool = False,
+		auto_merge: bool = True,
+	) -> dict[str, Any]:
+		"""
+		Phase 10 — City conductor.
+
+		For each selected family: open a job and either run TeamOrchestrator
+		(when ``llm_fn`` is provided) or fall back to multi-contributor pulse tools
+		so demos/tests work without a live LLM.
+		"""
+		from ..orchestration.city_pulse import multi_contributor_plan, parse_agent_uuid, pick_agent_for_district
+
+		summaries = await self.list_families()
+		summaries = summaries[: max(1, max_families)]
+		allowed = {d.lower() for d in districts} if districts else None
+		template = task_template or (
+			"As a cohesive family in the {district} district, write a short plan note "
+			"into the commons and produce one small runnable Python artifact named "
+			"conduct/{slug}.py that prints 'city-conduct-ok'. Use tools."
+		)
+
+		results: list[dict[str, Any]] = []
+		mode = "llm" if llm_fn is not None else "tools"
+
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			district = (detail.get("default_district") or "build").lower()
+			if allowed is not None and district not in allowed:
+				continue
+
+			fid = UUID(detail["id"])
+			slug = detail["name"].replace(" ", "-").lower()[:32]
+			lead = pick_agent_for_district(detail["members"], district)
+			lead_id = parse_agent_uuid(lead.get("agent_id") if lead else None)
+
+			job = await self.start_job(
+				family_id=fid,
+				goal=f"Conduct · {district} · {detail['name']}",
+				district=district,
+			)
+			job_id = UUID(job["id"])
+			await self.emit_event(
+				event_type="city.conduct.started",
+				family_id=fid,
+				job_id=job_id,
+				payload={
+					"family_id": str(fid),
+					"district": district,
+					"mode": mode,
+					"agent_id": str(lead_id) if lead_id else None,
+				},
+			)
+
+			team_payload: dict[str, Any] | None = None
+			contributors: list[dict[str, Any]] = []
+			ok = True
+
+			if llm_fn is not None:
+				task = template.format(district=district, slug=slug, family=detail["name"])
+				try:
+					team_payload = await self.invoke_team_on_job(
+						job_id,
+						task,
+						llm_fn=llm_fn,
+						agent_id=lead_id,
+						use_langgraph=use_langgraph,
+					)
+					ok = True
+				except Exception as exc:  # noqa: BLE001
+					ok = False
+					team_payload = {"error": str(exc)}
+			else:
+				plan = multi_contributor_plan(
+					detail["members"],
+					district=district,
+					family_slug=f"conduct-{slug}",
+				)
+				for batch in plan:
+					aid = parse_agent_uuid(batch.get("agent_id"))
+					exec_result = await self.execute_tool_calls(
+						job_id,
+						batch["calls"],
+						agent_id=aid,
+					)
+					tool_ok = all(r.get("ok", True) for r in exec_result.get("tool_results", []))
+					ok = ok and tool_ok
+					contributors.append(
+						{
+							"agent_id": str(aid) if aid else None,
+							"role_label": batch.get("role_label"),
+							"ok": tool_ok,
+						}
+					)
+
+			score = await self.cohesion_score(job_id)
+			decision = None
+			if auto_merge:
+				threshold = self._cohesion_threshold(detail)
+				if score["score"] >= threshold:
+					decision = await self.cohesion_decide(
+						job_id,
+						action="merge",
+						reason=f"Conduct merge ({mode})",
+						force=True if mode == "llm" else False,
+					)
+				else:
+					decision = await self.cohesion_decide(
+						job_id,
+						action="veto",
+						reason=f"Conduct veto: cohesion {score['score']} < {threshold}",
+					)
+
+			await self.emit_event(
+				event_type="city.conduct.finished",
+				family_id=fid,
+				job_id=job_id,
+				payload={
+					"family_id": str(fid),
+					"district": district,
+					"mode": mode,
+					"ok": ok,
+					"cohesion": score["score"],
+					"decision": (decision or {}).get("decision") if decision else None,
+					"agent_id": str(lead_id) if lead_id else None,
+				},
+			)
+
+			results.append(
+				{
+					"family_id": str(fid),
+					"family_name": detail["name"],
+					"district": district,
+					"job_id": str(job_id),
+					"mode": mode,
+					"ok": ok,
+					"cohesion": score,
+					"decision": (decision or {}).get("decision") if decision else None,
+					"contributors": contributors,
+					"team": team_payload,
+				}
+			)
+
+		return {
+			"mode": mode,
+			"conducted": len(results),
+			"merged": sum(1 for r in results if r.get("decision") == "merge"),
+			"vetoed": sum(1 for r in results if r.get("decision") == "veto"),
+			"results": results,
+			"avg_cohesion": round(
+				sum(r["cohesion"]["score"] for r in results) / len(results),
+				4,
+			)
+			if results
+			else 0.0,
+		}
+
 	async def export_austin_pack(
 		self,
 		*,

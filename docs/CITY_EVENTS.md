@@ -160,6 +160,10 @@ Parent rejected the merge (Phase 7). Same identity fields as merge; job ends `fa
 
 City-wide pulse wave (Phase 7). Payload includes `district`, `family_id`, `agent_id`, and on finish `cohesion` + `decision`.
 
+### `city.conduct.started` / `city.conduct.finished`
+
+City conductor wave (Phase 10). Payload includes `mode` (`llm`|`tools`), `district`, `ok`, `cohesion`, `decision`.
+
 ### `viz.pulse` / `viz.custom`
 
 Optional viz-only pulses from `emit_viz_event` (allowlisted).

@@ -548,6 +548,41 @@ export function CityView() {
     }
   };
 
+  const onConduct = async () => {
+    setLoading(true);
+    setError(null);
+    setCityMode(true);
+    try {
+      const { data } = await api.post<{
+        mode: string;
+        conducted: number;
+        merged: number;
+        vetoed: number;
+        avg_cohesion: number;
+        results: Array<{ agent_id?: string; decision?: string; ok?: boolean }>;
+      }>('/city/conduct', {
+        max_families: 4,
+        districts: districtFilter.length ? districtFilter : undefined,
+        use_llm: true,
+        auto_merge: true,
+      });
+      setLastPulse({
+        pulsed: data.conducted,
+        merged: data.merged,
+        vetoed: data.vetoed,
+        avg_cohesion: data.avg_cohesion,
+      });
+      await loadSnapshot();
+      setStatusLine(
+        `Conduct (${data.mode}) — ${data.conducted} families · ${data.merged} merged · cohesion ${data.avg_cohesion}`,
+      );
+    } catch (err) {
+      setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const toggleDistrict = (d: string) => {
     setDistrictFilter((prev) =>
       prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d],
@@ -734,6 +769,9 @@ export function CityView() {
           </button>
           <button type="button" className="btn pulse-btn" onClick={onPulse} disabled={loading}>
             Pulse city
+          </button>
+          <button type="button" className="btn ghost" onClick={onConduct} disabled={loading}>
+            Conduct
           </button>
           <button type="button" className="btn cinema-btn" onClick={onCinema} disabled={loading || cinema}>
             {cinema ? 'Cinema…' : 'Cinema'}

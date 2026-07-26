@@ -773,6 +773,50 @@ async def city_heartbeat_tick(
 		raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class ConductCityRequest(BaseModel):
+	max_families: int = Field(default=4, ge=1, le=20)
+	districts: Optional[list[str]] = None
+	task_template: Optional[str] = None
+	use_llm: bool = True
+	use_langgraph: bool = False
+	auto_merge: bool = True
+
+
+@router.post("/conduct")
+async def conduct_city(
+	body: ConductCityRequest | None = None,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""
+	Phase 10 — city conductor: TeamOrchestrator (LLM) or tool fallback across families.
+	"""
+	from ..integrations.llm import get_llm_provider
+
+	payload = body or ConductCityRequest()
+	service = CityService(db)
+	llm_fn = None
+	if payload.use_llm:
+		llm = get_llm_provider()
+		if llm.is_available():
+
+			async def llm_fn(system: str, user: str) -> str:
+				return await llm.chat([{"role": "user", "content": user}], system_prompt=system)
+
+	try:
+		return await service.conduct_city(
+			max_families=payload.max_families,
+			districts=payload.districts,
+			task_template=payload.task_template,
+			llm_fn=llm_fn,
+			use_langgraph=payload.use_langgraph,
+			auto_merge=payload.auto_merge,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/export/austin")
 async def export_austin_pack(
 	event_limit: int = 200,
