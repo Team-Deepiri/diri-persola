@@ -39,11 +39,13 @@ class TestAustinExport:
 		service = CityService(db_session)
 		await service.scale_probe(families=2, agents_per_family=3, name_prefix="P9", run_jobs=True)
 		pack = await service.export_austin_pack(event_limit=50, include_artifacts=True)
-		assert pack["pack_version"] == "1.0"
+		assert pack["pack_version"] == "1.3"
 		assert pack["vitals"]["agent_count"] >= 6
 		assert len(pack["graph"]["nodes"]) >= 6
 		assert len(pack["graph"]["edges"]) >= 1
 		assert isinstance(pack["events"], list)
+		assert "chronicle" in pack
+		assert "generations" in pack
 		assert pack["commons_mirror"]["enabled"] is True
 		assert "export" in pack["hints"]
 
@@ -63,8 +65,9 @@ class TestAustinExport:
 		export = await http_client.get("/api/v1/city/export/austin")
 		assert export.status_code == 200
 		body = export.json()
-		assert body["pack_version"] == "1.0"
+		assert body["pack_version"] == "1.3"
 		assert len(body["graph"]["nodes"]) >= 1
+		assert "generations" in body
 
 		status = await http_client.get("/api/v1/city/commons/status")
 		assert status.status_code == 200
