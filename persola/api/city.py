@@ -103,6 +103,18 @@ class WedgeRunRequest(BaseModel):
 	goal: Optional[str] = None
 
 
+class ScaleProbeRequest(BaseModel):
+	families: int = Field(default=5, ge=1, le=20)
+	agents_per_family: int = Field(default=10, ge=2, le=25)
+	name_prefix: str = Field(default="ScaleProbe", min_length=1, max_length=64)
+	run_jobs: bool = True
+
+
+class EnqueueToolsRequest(BaseModel):
+	calls: list[dict[str, Any]] = Field(default_factory=list)
+	agent_id: Optional[str] = None
+
+
 @router.get("/families")
 async def list_families(limit: int = 50, db: AsyncSession = Depends(get_db)):
 	service = CityService(db)
@@ -486,3 +498,140 @@ async def stream_city_events(
 			"X-Accel-Buffering": "no",
 		},
 	)
+
+
+@router.get("/scale/status")
+async def city_scale_status():
+	"""Worker pool + concurrency governor snapshot (Phase 5)."""
+	from ..orchestration.city_scale import GLOBAL_GOVERNOR
+	from ..orchestration.city_worker import CITY_WORKER_POOL
+
+	return {
+		"worker_pool": CITY_WORKER_POOL.snapshot(),
+		"governor": GLOBAL_GOVERNOR.snapshot(),
+		"docs": "/docs/CITY_SCALE.md",
+	}
+
+
+@router.get("/scale/path")
+async def city_scale_path():
+	"""Documented path to ~100 agents — bottlenecks and mitigations."""
+	from ..orchestration.city_scale import DEFAULT_SCALE_CONFIG, GLOBAL_GOVERNOR
+
+	cfg = DEFAULT_SCALE_CONFIG
+	return {
+		"target_agents": cfg.target_agents,
+		"probe_default": {
+			"families": cfg.probe_families,
+			"agents_per_family": cfg.probe_agents_per_family,
+			"total": cfg.probe_families * cfg.probe_agents_per_family,
+		},
+		"bottlenecks": [
+			{
+				"name": "LLM cost/latency",
+				"mitigation": "Child agents use PERSOLA_CITY_CHILD_MODEL; parent uses PERSOLA_CITY_PARENT_MODEL",
+			},
+			{
+				"name": "Tool execution fan-out",
+				"mitigation": "CityWorkerPool + ConcurrencyGovernor (global / family / district caps)",
+			},
+			{
+				"name": "District hot spots",
+				"mitigation": "Shard jobs across build/viz/research/ops queues",
+			},
+			{
+				"name": "Process memory",
+				"mitigation": "Bound queue_maxsize; avoid retaining full LLM transcripts in worker items",
+			},
+			{
+				"name": "Runtime spawn",
+				"mitigation": "Optional Cyrex bulk sync when families leave Persola",
+			},
+		],
+		"config": GLOBAL_GOVERNOR.snapshot()["config"],
+	}
+
+
+@router.post("/scale/probe")
+async def city_scale_probe(
+	body: ScaleProbeRequest,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Create ≥5 families totaling ≥50 agents and optionally run probe jobs."""
+	service = CityService(db)
+	try:
+		return await service.scale_probe(
+			families=body.families,
+			agents_per_family=body.agents_per_family,
+			name_prefix=body.name_prefix,
+			run_jobs=body.run_jobs,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/jobs/{job_id}/enqueue")
+async def enqueue_job_tools(
+	job_id: str,
+	body: EnqueueToolsRequest,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Enqueue tool calls onto the city worker pool (Phase 5)."""
+	if not body.calls:
+		raise HTTPException(status_code=400, detail="No tool calls provided")
+	service = CityService(db)
+	try:
+		return await service.enqueue_job_tools(
+			UUID(job_id),
+			body.calls,
+			agent_id=UUID(body.agent_id) if body.agent_id else None,
+		)
+	except ValueError as exc:
+		await db.rollback()
+		status = 404 if "not found" in str(exc).lower() else 400
+		raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+@router.get("/jobs/{job_id}/cohesion")
+async def job_cohesion(job_id: str, db: AsyncSession = Depends(get_db)):
+	service = CityService(db)
+	try:
+		return await service.cohesion_score(UUID(job_id))
+	except ValueError as exc:
+		raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/families/{family_id}/cyrex/sync")
+async def family_cyrex_sync(
+	family_id: str,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Bulk-push family personas to Cyrex when configured."""
+	service = CityService(db)
+	try:
+		return await service.bulk_cyrex_sync(UUID(family_id))
+	except ValueError as exc:
+		await db.rollback()
+		raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/workers/work/{work_id}")
+async def get_work_item(work_id: str):
+	from ..orchestration.city_worker import CITY_WORKER_POOL
+
+	item = CITY_WORKER_POOL.get(work_id)
+	if item is None:
+		raise HTTPException(status_code=404, detail="Work item not found")
+	return {
+		"id": item.id,
+		"status": item.status,
+		"job_id": str(item.job_id),
+		"family_id": str(item.family_id),
+		"district": item.district,
+		"error": item.error,
+		"result": item.result,
+	}

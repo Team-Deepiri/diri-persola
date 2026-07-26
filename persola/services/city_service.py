@@ -33,6 +33,7 @@ from ..db.repositories.city_repository import (
 	WorkspaceRunRepository,
 )
 from ..engine import PersonaEngine
+from ..orchestration.city_scale import DEFAULT_SCALE_CONFIG
 
 DEFAULT_CITY_TOOL_TAGS: list[str] = ["workspace", "run", "memory", "viz"]
 
@@ -71,6 +72,7 @@ class CityService:
 		self.agents = AgentRepository(db)
 		self.personas = PersonaRepository(db)
 		self.engine = PersonaEngine()
+		self.model_tiers = DEFAULT_SCALE_CONFIG.model_tiers
 
 	async def emit_event(
 		self,
@@ -253,11 +255,15 @@ class CityService:
 					raise ValueError("persona_id not found")
 
 			profile = persona.to_profile()
+			parent_model = self.model_tiers.for_role("parent", role_label)
+			persona.model = parent_model
+			await self.db.flush()
 			parent_agent = await self.agents.create(
 				AgentModel(
 					name=parent_name or f"{name} Parent",
 					role="assistant",
 					persona_id=resolved_persona_id,
+					model=parent_model,
 					system_prompt=self.engine.build_system_prompt(profile),
 					tools=tool_names_for_tags(tags),
 					memory_enabled=True,
@@ -355,12 +361,13 @@ class CityService:
 				base_knobs = parent_persona.knob_values()
 
 		merged_knobs = {**base_knobs, **overrides}
+		child_model = self.model_tiers.for_role("child", role_label)
 		child_persona = await self.personas.create(
 			PersonaModel(
 				name=f"{name} Persona",
 				description=description or f"Child of {parent_agent.name} in family {family.name}",
 				**{field: merged_knobs.get(field, 0.5) for field in PERSONA_KNOB_FIELDS},
-				model=parent_persona.model if parent_persona else "llama3:8b",
+				model=child_model,
 				temperature=parent_persona.temperature if parent_persona else 0.7,
 				max_tokens=parent_persona.max_tokens if parent_persona else 2000,
 			)
@@ -371,6 +378,7 @@ class CityService:
 				name=name,
 				role="assistant",
 				persona_id=child_persona.id,
+				model=child_model,
 				system_prompt=self.engine.build_system_prompt(profile),
 				tools=tool_names_for_tags(inherited_tags),
 				memory_enabled=True,
@@ -456,6 +464,13 @@ class CityService:
 				"status": status,
 			},
 		)
+
+		try:
+			from ..metrics import record_city_job
+
+			record_city_job(resolved_district, status)
+		except Exception:
+			pass
 
 		await self.db.commit()
 		await self.db.refresh(job)
@@ -639,6 +654,12 @@ class CityService:
 		if commit:
 			await self.db.commit()
 			await self.db.refresh(row)
+		try:
+			from ..metrics import record_city_tool_run
+
+			record_city_tool_run(tool, status)
+		except Exception:
+			pass
 		return self._serialize_run(row)
 
 	async def set_job_status(
@@ -676,6 +697,15 @@ class CityService:
 			)
 		await self.db.commit()
 		await self.db.refresh(job)
+		try:
+			from ..metrics import record_city_job, set_city_cohesion_score
+
+			record_city_job(job.district, status)
+			if status == CityJobStatus.COMPLETED.value:
+				score = await self.cohesion_score(job.id)
+				set_city_cohesion_score(score["score"])
+		except Exception:
+			pass
 		return self._serialize_job(job)
 
 	async def execute_tool_calls(
@@ -943,4 +973,217 @@ class CityService:
 			"events": await self.list_events(job_id=job_id),
 			"contributions": contributions,
 			"success": succeeded,
+		}
+
+	# ── Phase 5 scale ────────────────────────────────────────────────────
+
+	async def cohesion_score(self, job_id: UUID) -> dict[str, Any]:
+		"""
+		Cohesion ∈ [0,1]: fraction of family members who authored an artifact
+		or started a run on this job, blended with tool success rate.
+		"""
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		members = await self.members.list_for_family(job.family_id)
+		member_agents = {str(m.agent_id) for m in members}
+		arts = await self.artifacts.list_for_job(job_id, limit=1000)
+		runs = await self.runs.list_for_job(job_id, limit=1000)
+		authors = {
+			str(a.created_by_agent_id)
+			for a in arts
+			if a.created_by_agent_id and str(a.created_by_agent_id) in member_agents
+		}
+		runners = {
+			str(r.started_by_agent_id)
+			for r in runs
+			if r.started_by_agent_id and str(r.started_by_agent_id) in member_agents
+		}
+		participants = authors | runners
+		participation = (len(participants) / len(member_agents)) if member_agents else 0.0
+		succeeded = sum(1 for r in runs if r.status == WorkspaceRunStatus.SUCCEEDED.value)
+		success_rate = (succeeded / len(runs)) if runs else 0.0
+		score = round(0.6 * participation + 0.4 * success_rate, 4)
+		return {
+			"job_id": str(job_id),
+			"score": score,
+			"participation": round(participation, 4),
+			"tool_success_rate": round(success_rate, 4),
+			"participants": len(participants),
+			"family_size": len(member_agents),
+			"artifact_count": len(arts),
+			"run_count": len(runs),
+		}
+
+	async def scale_probe(
+		self,
+		*,
+		families: int | None = None,
+		agents_per_family: int | None = None,
+		name_prefix: str = "ScaleProbe",
+		run_jobs: bool = True,
+	) -> dict[str, Any]:
+		"""
+		Sustained probe: create ≥5 families × N agents (default 50 total) and
+		optionally run a tiny build+run job per family.
+		"""
+		cfg = DEFAULT_SCALE_CONFIG
+		n_families = max(1, families if families is not None else cfg.probe_families)
+		per_family = max(2, agents_per_family if agents_per_family is not None else cfg.probe_agents_per_family)
+		# per_family includes parent, so children = per_family - 1
+		children = max(1, per_family - 1)
+
+		created_families: list[dict[str, Any]] = []
+		jobs: list[dict[str, Any]] = []
+		total_agents = 0
+
+		for i in range(n_families):
+			district = ("build", "viz", "research", "ops")[i % 4]
+			family = await self.create_family(
+				name=f"{name_prefix}-{i + 1}",
+				description=f"Phase 5 scale probe family {i + 1}",
+				default_district=district,
+				parent_name=f"{name_prefix} Parent {i + 1}",
+				role_label="coordinator",
+				policy={"scale_probe": True, "shard": f"district:{district}"},
+			)
+			fid = UUID(family["id"])
+			for c in range(children):
+				role = ("analyst", "creative", "executor", "empath", "builder")[c % 5]
+				await self.spawn_child(
+					fid,
+					name=f"{name_prefix}-{i + 1}-C{c + 1}",
+					role_label=role,
+					knob_overrides={"creativity": 0.4 + (c % 5) * 0.1},
+				)
+			detail = await self.get_family(fid)
+			assert detail is not None
+			created_families.append(detail)
+			total_agents += len(detail["members"])
+
+			if run_jobs:
+				job = await self.start_job(
+					family_id=fid,
+					goal=f"probe write+run for {detail['name']}",
+					district=district,
+				)
+				# Prefer an executor-ish child; fall back to any child
+				agent_id = None
+				for m in detail["members"]:
+					if m.get("role_label") == "executor":
+						agent_id = UUID(m["agent_id"])
+						break
+				if agent_id is None:
+					child = next((m for m in detail["members"] if m["role_in_family"] == "child"), None)
+					agent_id = UUID(child["agent_id"]) if child else None
+				await self.execute_tool_calls(
+					UUID(job["id"]),
+					[
+						{
+							"name": "workspace_write",
+							"args": {
+								"path": f"probe/{i}.py",
+								"content": f'print("probe-{i}")\n',
+							},
+						},
+						{"name": "run_python", "args": {"path": f"probe/{i}.py"}},
+					],
+					agent_id=agent_id,
+				)
+				await self.set_job_status(
+					UUID(job["id"]),
+					status=CityJobStatus.COMPLETED.value,
+					result_summary="scale probe job",
+				)
+				jobs.append(await self.get_job(UUID(job["id"])) or job)
+
+		try:
+			from ..metrics import set_city_active_agents
+
+			set_city_active_agents(total_agents)
+		except Exception:
+			pass
+
+		return {
+			"families": len(created_families),
+			"agents": total_agents,
+			"jobs": len(jobs),
+			"family_ids": [f["id"] for f in created_families],
+			"job_ids": [j["id"] for j in jobs if j],
+			"meets_probe_bar": total_agents >= 50 and len(created_families) >= 5,
+			"model_tiers": {
+				"parent": self.model_tiers.parent,
+				"child": self.model_tiers.child,
+			},
+			"path_to_100": {
+				"current_agents": total_agents,
+				"target": cfg.target_agents,
+				"next": "raise workers + per-family concurrency; shard by district; keep child models cheap",
+			},
+		}
+
+	async def bulk_cyrex_sync(self, family_id: UUID) -> dict[str, Any]:
+		"""Push all family member personas to Cyrex when configured."""
+		from ..integrations.cyrex import CyrexClient
+
+		family = await self.get_family(family_id)
+		if family is None:
+			raise ValueError("Family not found")
+		client = CyrexClient()
+		if not client.is_configured:
+			return {
+				"configured": False,
+				"synced": 0,
+				"results": [],
+				"detail": "Cyrex is not configured (set CYREX_URL and CYREX_API_KEY)",
+			}
+
+		results: list[dict[str, Any]] = []
+		for m in family["members"]:
+			agent = await self.agents.get(UUID(m["agent_id"]))
+			if agent is None or not agent.persona_id:
+				results.append({"agent_id": m["agent_id"], "ok": False, "error": "no persona"})
+				continue
+			persona = await self.personas.get(agent.persona_id)
+			if persona is None:
+				results.append({"agent_id": m["agent_id"], "ok": False, "error": "persona missing"})
+				continue
+			try:
+				payload = await client.push_persona(persona.to_profile())
+				results.append({"agent_id": m["agent_id"], "ok": True, "response": payload})
+			except Exception as exc:  # noqa: BLE001
+				results.append({"agent_id": m["agent_id"], "ok": False, "error": str(exc)})
+
+		return {
+			"configured": True,
+			"family_id": str(family_id),
+			"synced": sum(1 for r in results if r.get("ok")),
+			"results": results,
+		}
+
+	async def enqueue_job_tools(
+		self,
+		job_id: UUID,
+		calls: list[dict[str, Any]],
+		*,
+		agent_id: UUID | None = None,
+	) -> dict[str, Any]:
+		from ..orchestration.city_worker import enqueue_city_tools
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		item = await enqueue_city_tools(
+			job_id=job_id,
+			family_id=job.family_id,
+			district=job.district,
+			calls=calls,
+			agent_id=agent_id,
+		)
+		return {
+			"work_id": item.id,
+			"status": item.status,
+			"job_id": str(job_id),
+			"district": job.district,
+			"queue": True,
 		}

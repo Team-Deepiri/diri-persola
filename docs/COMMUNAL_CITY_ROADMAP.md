@@ -267,7 +267,7 @@ docs/
 - [x] **P2** `workspace_*` + sandboxed `run_python` + orchestrator tool calls
 - [x] **P3** Wedge demo: one family builds and runs; UI City mode
 - [x] **P4** City graph + live events; Austin contract documented
-- [ ] **P5** Scale path to ~100 with workers/districts/metrics
+- [x] **P5** Scale path to ~100 with workers/districts/metrics
 
 ---
 
