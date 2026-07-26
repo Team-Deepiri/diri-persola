@@ -262,8 +262,8 @@ docs/
 
 ## 12. Milestone checklist
 
-- [ ] **P0** Design + roadmap docs merged
-- [ ] **P1** City schema + `/api/v1/city` CRUD/lineage/jobs
+- [x] **P0** Design + roadmap docs merged
+- [x] **P1** City schema + `/api/v1/city` CRUD/lineage/jobs
 - [ ] **P2** `workspace_*` + sandboxed `run_python` + orchestrator tool calls
 - [ ] **P3** Wedge demo: one family builds and runs; UI City mode
 - [ ] **P4** City graph + live events; Austin contract documented

@@ -10,6 +10,7 @@ Agentic Personality Framework - Create AI agents with customizable personalities
 - **Cyrex Integration** - Spawn agents into Cyrex
 - **Persona Blending** - Combine personas
 - **Real-time Playground** - Test and iterate
+- **Communal City (Phase 1)** - Families, lineage spawn, city jobs, shared commons + events (`/api/v1/city`) — see [docs/COMMUNAL_CITY_DESIGN.md](docs/COMMUNAL_CITY_DESIGN.md)
 
 The goal of this framework is to create agents who don’t just execute instructions—they reason, reflect, and act as if they have morals that are going to be completely CHOSEN by them. AI that feels. We can study and map emotional context to numerical values, similiar to my aamati project.
 

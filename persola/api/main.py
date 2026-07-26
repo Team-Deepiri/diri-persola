@@ -117,9 +117,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from .city import router as city_router
 from .teams import router as teams_router
 
 app.include_router(teams_router)
+app.include_router(city_router)
 
 engine = PersonaEngine()
 cyrex_client = CyrexClient()
