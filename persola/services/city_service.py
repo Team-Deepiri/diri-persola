@@ -1478,16 +1478,28 @@ class CityService:
 
 		snap = await self.city_snapshot(event_limit=event_limit)
 		avg_eff = round(sum(efficiencies) / max(1, len(efficiencies)), 4) if efficiencies else 0.0
+		city = {
+			"living": living_total,
+			"deceased": deceased_total,
+			"family_count": len(ecosystems),
+			"generation_max": gen_max,
+			"avg_efficiency": avg_eff,
+			"distinct_personalities": snap.get("distinct_personalities"),
+		}
+		try:
+			from ..metrics import set_city_life_vitals
+
+			set_city_life_vitals(
+				living=living_total,
+				deceased=deceased_total,
+				generation_max=gen_max,
+				efficiency=avg_eff,
+			)
+		except Exception:
+			pass
 		return {
 			"ecosystems": ecosystems,
-			"city": {
-				"living": living_total,
-				"deceased": deceased_total,
-				"family_count": len(ecosystems),
-				"generation_max": gen_max,
-				"avg_efficiency": avg_eff,
-				"distinct_personalities": snap.get("distinct_personalities"),
-			},
+			"city": city,
 			"events": snap.get("events") or [],
 		}
 
@@ -1720,6 +1732,13 @@ class CityService:
 		await self.db.commit()
 		avg_b = round(sum(eff_before) / max(1, len(eff_before)), 4) if eff_before else 0.0
 		avg_a = round(sum(eff_after) / max(1, len(eff_after)), 4) if eff_after else 0.0
+		try:
+			from ..metrics import record_city_death, record_city_succession
+
+			record_city_death(died)
+			record_city_succession(born)
+		except Exception:
+			pass
 		return {
 			"aged": aged,
 			"died": died,
@@ -2242,8 +2261,78 @@ class CityService:
 			"progress": min(1.0, agents / max(1, DEFAULT_SCALE_CONFIG.target_agents)),
 		}
 
-	async def bulk_cyrex_sync(self, family_id: UUID) -> dict[str, Any]:
-		"""Push all family member personas to Cyrex when configured."""
+	async def city_memorial(self, *, limit: int = 100) -> dict[str, Any]:
+		"""
+		Phase 11 — memorial roll: deceased members and the heirs who carry their legacy.
+
+		Death stays visible so Austin / operators can see knowledge continuity.
+		"""
+		summaries = await self.list_families()
+		entries: list[dict[str, Any]] = []
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			members = detail.get("members") or []
+			for m in members:
+				if (m.get("life_status") or "") != FamilyMemberLifeStatus.DECEASED.value:
+					continue
+				heirs = [
+					{
+						"member_id": h["id"],
+						"agent_id": h.get("agent_id"),
+						"name": (h.get("agent") or {}).get("name"),
+						"generation": h.get("generation"),
+						"life_status": h.get("life_status"),
+					}
+					for h in members
+					if h.get("successor_of_id") == m["id"]
+				]
+				entries.append(
+					{
+						"family_id": detail["id"],
+						"family_name": detail["name"],
+						"district": detail.get("default_district"),
+						"member_id": m["id"],
+						"agent_id": m.get("agent_id"),
+						"name": (m.get("agent") or {}).get("name"),
+						"generation": m.get("generation", 0),
+						"role_label": m.get("role_label"),
+						"goals": m.get("goals") or [],
+						"dreams": m.get("dreams") or [],
+						"deceased_at": m.get("deceased_at"),
+						"heirs": heirs,
+						"legacy": m.get("legacy") or {},
+					}
+				)
+				# Cap growth
+				if len(entries) >= limit:
+					break
+			if len(entries) >= limit:
+				break
+
+		eco = await self.city_ecosystem(event_limit=10)
+		city = eco.get("city") or {}
+		return {
+			"memorial": entries,
+			"count": len(entries),
+			"city": {
+				"living": city.get("living"),
+				"deceased": city.get("deceased"),
+				"generation_max": city.get("generation_max"),
+				"avg_efficiency": city.get("avg_efficiency"),
+			},
+		}
+
+	async def bulk_cyrex_sync(
+		self,
+		family_id: UUID,
+		*,
+		living_only: bool = True,
+		dry_run: bool = False,
+		concurrency: int = 4,
+	) -> dict[str, Any]:
+		"""Push family member personas to Cyrex when configured (living by default)."""
 		from ..integrations.cyrex import CyrexClient
 
 		family = await self.get_family(family_id)
@@ -2254,31 +2343,117 @@ class CityService:
 			return {
 				"configured": False,
 				"synced": 0,
+				"skipped": 0,
+				"dry_run": dry_run,
 				"results": [],
 				"detail": "Cyrex is not configured (set CYREX_URL and CYREX_API_KEY)",
 			}
 
-		results: list[dict[str, Any]] = []
+		candidates: list[tuple[dict[str, Any], Any]] = []
+		skipped = 0
 		for m in family["members"]:
+			if living_only and (m.get("life_status") or "alive") != FamilyMemberLifeStatus.ALIVE.value:
+				skipped += 1
+				continue
+			if living_only and m.get("is_active") is False:
+				skipped += 1
+				continue
 			agent = await self.agents.get(UUID(m["agent_id"]))
 			if agent is None or not agent.persona_id:
-				results.append({"agent_id": m["agent_id"], "ok": False, "error": "no persona"})
+				skipped += 1
 				continue
 			persona = await self.personas.get(agent.persona_id)
 			if persona is None:
-				results.append({"agent_id": m["agent_id"], "ok": False, "error": "persona missing"})
+				skipped += 1
 				continue
-			try:
-				payload = await client.push_persona(persona.to_profile())
-				results.append({"agent_id": m["agent_id"], "ok": True, "response": payload})
-			except Exception as exc:  # noqa: BLE001
-				results.append({"agent_id": m["agent_id"], "ok": False, "error": str(exc)})
+			candidates.append((m, persona.to_profile()))
+
+		if dry_run:
+			return {
+				"configured": True,
+				"family_id": str(family_id),
+				"synced": 0,
+				"would_sync": len(candidates),
+				"skipped": skipped,
+				"dry_run": True,
+				"results": [
+					{"agent_id": m["agent_id"], "persona_id": p.id, "ok": True, "dry_run": True}
+					for m, p in candidates
+				],
+			}
+
+		push_results = await client.push_personas(
+			[p for _, p in candidates],
+			concurrency=concurrency,
+		)
+		# Attach agent ids
+		by_persona = {p.id: m for m, p in candidates}
+		results: list[dict[str, Any]] = []
+		for r in push_results:
+			m = by_persona.get(r.get("persona_id") or "")
+			results.append(
+				{
+					**r,
+					"agent_id": m["agent_id"] if m else None,
+					"member_id": m["id"] if m else None,
+				}
+			)
+
+		await self.emit_event(
+			event_type="cyrex.sync.finished",
+			family_id=family_id,
+			payload={
+				"synced": sum(1 for r in results if r.get("ok")),
+				"failed": sum(1 for r in results if not r.get("ok")),
+				"skipped": skipped,
+				"living_only": living_only,
+			},
+		)
+		await self.db.commit()
 
 		return {
 			"configured": True,
 			"family_id": str(family_id),
 			"synced": sum(1 for r in results if r.get("ok")),
+			"skipped": skipped,
+			"dry_run": False,
 			"results": results,
+		}
+
+	async def city_cyrex_sync(
+		self,
+		*,
+		max_families: int = 20,
+		living_only: bool = True,
+		dry_run: bool = False,
+		concurrency: int = 4,
+	) -> dict[str, Any]:
+		"""Phase 11 — sync living personas across active families to Cyrex."""
+		summaries = await self.list_families()
+		summaries = summaries[: max(1, max_families)]
+		family_results: list[dict[str, Any]] = []
+		for s in summaries:
+			try:
+				family_results.append(
+					await self.bulk_cyrex_sync(
+						UUID(s["id"]),
+						living_only=living_only,
+						dry_run=dry_run,
+						concurrency=concurrency,
+					)
+				)
+			except ValueError as exc:
+				family_results.append({"family_id": s["id"], "ok": False, "error": str(exc)})
+
+		configured = any(r.get("configured") for r in family_results)
+		return {
+			"configured": configured,
+			"families": len(family_results),
+			"synced": sum(int(r.get("synced") or 0) for r in family_results),
+			"skipped": sum(int(r.get("skipped") or 0) for r in family_results),
+			"dry_run": dry_run,
+			"living_only": living_only,
+			"results": family_results,
 		}
 
 	async def enqueue_job_tools(

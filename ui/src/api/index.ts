@@ -102,8 +102,11 @@ export const cityApi = {
   heartbeat: () => api.get('/city/heartbeat'),
   heartbeatTick: () => api.post('/city/heartbeat/tick'),
   ecosystem: () => api.get('/city/ecosystem'),
+  memorial: (limit = 100) => api.get('/city/memorial', { params: { limit } }),
   lifeTick: (body: { max_families?: number; force_age?: number } = {}) =>
     api.post('/city/life/tick', body),
+  cyrexSyncCity: (body: { max_families?: number; living_only?: boolean; dry_run?: boolean } = {}) =>
+    api.post('/city/cyrex/sync', body),
   exportAustin: () => api.get('/city/export/austin'),
   commonsStatus: (jobId?: string) =>
     api.get('/city/commons/status', { params: jobId ? { job_id: jobId } : {} }),

@@ -114,6 +114,25 @@ type EcosystemPayload = {
   };
 };
 
+type MemorialPayload = {
+  memorial: Array<{
+    family_id: string;
+    family_name: string;
+    name?: string;
+    generation: number;
+    goals: string[];
+    dreams: string[];
+    heirs: Array<{ name?: string; generation?: number }>;
+  }>;
+  count: number;
+  city: {
+    living?: number;
+    deceased?: number;
+    generation_max?: number;
+    avg_efficiency?: number;
+  };
+};
+
 type AwakenResult = {
   mode: string;
   families: number;
@@ -178,6 +197,7 @@ export function CityView() {
   const [family, setFamily] = useState<FamilyDetail | null>(null);
   const [snapshot, setSnapshot] = useState<CitySnapshot | null>(null);
   const [ecosystem, setEcosystem] = useState<EcosystemPayload | null>(null);
+  const [memorial, setMemorial] = useState<MemorialPayload | null>(null);
   const [cityMode, setCityMode] = useState(true);
   const [job, setJob] = useState<Job | null>(null);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -243,12 +263,14 @@ export function CityView() {
   }, []);
 
   const loadSnapshot = useCallback(async () => {
-    const [{ data }, eco] = await Promise.all([
+    const [{ data }, eco, mem] = await Promise.all([
       api.get<CitySnapshot>('/city/snapshot'),
       api.get<EcosystemPayload>('/city/ecosystem').catch(() => ({ data: null })),
+      api.get<MemorialPayload>('/city/memorial', { params: { limit: 40 } }).catch(() => ({ data: null })),
     ]);
     setSnapshot(data);
     if (eco.data) setEcosystem(eco.data);
+    if (mem.data) setMemorial(mem.data);
     if (data.events?.length) {
       setEvents((prev) => {
         const seen = new Set(prev.map((e) => e.id).filter(Boolean));
@@ -724,11 +746,18 @@ export function CityView() {
         ) as string[],
       );
       setPulses(ids.map((id, i) => ({ agentId: id, kind: 'run' as const, at: now - i * 25 })));
+      setCinemaLine('Generations turning — age, death, succession…');
+      const life = await api.post<{
+        died: number;
+        born: number;
+        efficiency_preserved: boolean;
+        efficiency_after: number;
+      }>('/city/life/tick', { force_age: 2, max_families: 12 });
       await loadSnapshot();
       setCinemaLine(
-        `Cinema pulse complete — ${data.pulsed} families · cohesion ${data.avg_cohesion}`,
+        `Cinema complete — ${data.pulsed} pulsed · ${life.data.died}† → ${life.data.born} heirs · eff ${life.data.efficiency_after}`,
       );
-      setStatusLine('Cinema demo finished — export an Austin pack or enable Heartbeat.');
+      setStatusLine('Cinema demo finished — memorial + Austin export ready; enable Heartbeat to keep living.');
     } catch (err) {
       setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
       setCinemaLine(null);
@@ -943,6 +972,23 @@ export function CityView() {
             ))}
             {families.length === 0 && <li className="muted">No families yet — awaken or seed.</li>}
           </ul>
+          {memorial && memorial.count > 0 && (
+            <>
+              <h2>Memorial</h2>
+              <ul className="family-list memorial-list">
+                {memorial.memorial.slice(0, 8).map((m) => (
+                  <li key={m.family_id + (m.name ?? '')}>
+                    <span>
+                      † {m.name ?? 'agent'} <span className="muted">G{m.generation}</span>
+                    </span>
+                    <span className="muted">
+                      {m.heirs[0]?.name ? `→ ${m.heirs[0].name}` : m.family_name}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </aside>
 
         <section className="city-main">

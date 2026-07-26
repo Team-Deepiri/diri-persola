@@ -105,6 +105,36 @@ CITY_ACTIVE_AGENTS = Gauge(
     "Agents belonging to active city families (approx)",
 )
 
+CITY_LIVING_AGENTS = Gauge(
+    "persola_city_living_agents",
+    "Living (active) city family members",
+)
+
+CITY_DECEASED_AGENTS = Gauge(
+    "persola_city_deceased_agents",
+    "Deceased city family members retained for lineage",
+)
+
+CITY_GENERATION_MAX = Gauge(
+    "persola_city_generation_max",
+    "Highest generation index observed in the city",
+)
+
+CITY_EFFICIENCY = Gauge(
+    "persola_city_efficiency",
+    "Avg completed jobs per living member across families",
+)
+
+CITY_DEATHS_TOTAL = Counter(
+    "persola_city_deaths_total",
+    "City member deaths (natural age-out)",
+)
+
+CITY_SUCCESSIONS_TOTAL = Counter(
+    "persola_city_successions_total",
+    "Legacy handoffs to next-generation heirs",
+)
+
 
 def record_llm_tokens(provider: str, model: str, tokens: int) -> None:
     """Increment the LLM token counter.  Call from invoke_agent on success."""
@@ -142,6 +172,30 @@ def set_city_queue_depth(depth: int) -> None:
 
 def set_city_active_agents(count: int) -> None:
     CITY_ACTIVE_AGENTS.set(max(0, count))
+
+
+def set_city_life_vitals(
+    *,
+    living: int,
+    deceased: int,
+    generation_max: int,
+    efficiency: float,
+) -> None:
+    CITY_LIVING_AGENTS.set(max(0, living))
+    CITY_DECEASED_AGENTS.set(max(0, deceased))
+    CITY_GENERATION_MAX.set(max(0, generation_max))
+    CITY_EFFICIENCY.set(max(0.0, efficiency))
+    CITY_ACTIVE_AGENTS.set(max(0, living))
+
+
+def record_city_death(count: int = 1) -> None:
+    if count > 0:
+        CITY_DEATHS_TOTAL.inc(count)
+
+
+def record_city_succession(count: int = 1) -> None:
+    if count > 0:
+        CITY_SUCCESSIONS_TOTAL.inc(count)
 
 
 # ---------------------------------------------------------------------------

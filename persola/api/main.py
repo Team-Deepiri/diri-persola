@@ -1115,8 +1115,37 @@ async def get_static(path: str, db: AsyncSession = Depends(get_db)):
 
 
 def main():
+    """ASGI entry — production workers via PERSOLA_WORKERS; reload when DEBUG."""
+    import os
+
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8002"))
+    workers = max(1, int(os.getenv("PERSOLA_WORKERS", "1")))
+    debug = os.getenv("DEBUG", "").lower() in {"1", "true", "yes"}
+    log_level = os.getenv("LOG_LEVEL", "info").lower()
+
+    # reload and multi-worker are mutually exclusive in uvicorn
+    if debug and workers == 1:
+        uvicorn.run(
+            "persola.api.main:app",
+            host=host,
+            port=port,
+            reload=True,
+            proxy_headers=True,
+            log_level=log_level,
+        )
+    else:
+        uvicorn.run(
+            "persola.api.main:app",
+            host=host,
+            port=port,
+            workers=workers,
+            proxy_headers=True,
+            forwarded_allow_ips="*",
+            log_level=log_level,
+        )
 
 
 if __name__ == "__main__":

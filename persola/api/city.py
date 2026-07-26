@@ -885,16 +885,56 @@ async def commons_mirror_status(
 @router.post("/families/{family_id}/cyrex/sync")
 async def family_cyrex_sync(
 	family_id: str,
+	living_only: bool = True,
+	dry_run: bool = False,
 	db: AsyncSession = Depends(get_db),
 	_rl: None = Depends(_city_rate_limit),
 ):
-	"""Bulk-push family personas to Cyrex when configured."""
+	"""Bulk-push family personas to Cyrex when configured (living members by default)."""
 	service = CityService(db)
 	try:
-		return await service.bulk_cyrex_sync(UUID(family_id))
+		return await service.bulk_cyrex_sync(
+			UUID(family_id),
+			living_only=living_only,
+			dry_run=dry_run,
+		)
 	except ValueError as exc:
 		await db.rollback()
 		raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+class CityCyrexSyncRequest(BaseModel):
+	max_families: int = Field(default=20, ge=1, le=50)
+	living_only: bool = True
+	dry_run: bool = False
+	concurrency: int = Field(default=4, ge=1, le=16)
+
+
+@router.get("/memorial")
+async def city_memorial(
+	limit: int = 100,
+	db: AsyncSession = Depends(get_db),
+):
+	"""Phase 11 — deceased roll + heirs (legacy continuity for viz)."""
+	service = CityService(db)
+	return await service.city_memorial(limit=min(max(limit, 1), 500))
+
+
+@router.post("/cyrex/sync")
+async def city_cyrex_sync(
+	body: CityCyrexSyncRequest | None = None,
+	db: AsyncSession = Depends(get_db),
+	_rl: None = Depends(_city_rate_limit),
+):
+	"""Phase 11 — sync living city personas to Cyrex across families."""
+	service = CityService(db)
+	payload = body or CityCyrexSyncRequest()
+	return await service.city_cyrex_sync(
+		max_families=payload.max_families,
+		living_only=payload.living_only,
+		dry_run=payload.dry_run,
+		concurrency=payload.concurrency,
+	)
 
 
 @router.get("/workers/work/{work_id}")

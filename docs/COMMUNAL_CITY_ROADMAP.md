@@ -1,6 +1,6 @@
 # Persola Communal City — Full Implementation Roadmap
 
-**Status:** Implemented (Phases 0–10)  
+**Status:** Implemented (Phases 0–11)  
 **Depends on:** [COMMUNAL_CITY_DESIGN.md](./COMMUNAL_CITY_DESIGN.md)  
 **Baseline:** Persola personality engine + team orchestration (LangGraph, Team Workbench) already in repo
 
@@ -32,6 +32,8 @@ Phase 8  Living heartbeat — multi-contributor pulse + auto-tick
 Phase 9  Austin export pack + disk commons + cinema demo
     │
 Phase 10 City conductor — LLM team-invoke across families
+    │
+Phase 11 Memorial + prod ops — era roll, life metrics, Cyrex living sync, ASGI workers
 ```
 
 ---
@@ -331,6 +333,27 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8g. Phase 11 — Memorial + production ops
+
+**Goal:** Death remains visible; ops can run and sync the living city.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `GET /api/v1/city/memorial` | Deceased roll + heirs (legacy continuity) |
+| Life Prometheus gauges | living / deceased / generation_max / efficiency / deaths / successions |
+| `POST /api/v1/city/cyrex/sync` | City-wide Cyrex push (living-only, dry_run) |
+| Family Cyrex sync | `living_only` + `dry_run` query flags; bounded concurrency |
+| ASGI workers | `PERSOLA_WORKERS`; `docker-compose.prod.yml`; `persola-server` respects DEBUG |
+| Cinema | Pulse → life tick → memorial in UI |
+
+### 8g.1 Exit criteria
+
+- Memorial lists deceased with at least one heir after life tick.
+- Cyrex dry_run reports `would_sync` without network when configured flag is off / dry.
+- Metrics helpers update after ecosystem / life tick.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -390,14 +413,15 @@ docs/
 - [x] **P8** Living heartbeat — multi-contributor pulse + auto-tick
 - [x] **P9** Austin export pack + disk commons mirror + cinema demo
 - [x] **P10** City conductor — LLM team-invoke / tool fallback across families
+- [x] **P11** Memorial + life metrics + Cyrex living sync + prod ASGI
 
 ---
 
 ## 13. Immediate next implementation step
 
-Phases 0–10 + life-cycle (7/8 deepen) are implemented on the communal-city branch. Remaining:
+Phases 0–11 are on the communal-city branch. Remaining:
 
-1. ~~Consolidate dual ORM (`tables.py` → `models.py`)~~ — done (`repo.py` wraps canonical models; `tables.py` deprecated aliases).
-2. Production WSGI/ASGI hardening + real Cyrex bulk sync in staging.
-3. Austin consume `GET /city/export/austin` pack **v1.1** (ecosystems + life fields + legacy edges).
-4. Optional: delete `persola/db/tables.py` / `config.py` after one release with no external imports.
+1. Staging: `docker compose -f docker-compose.yml -f docker-compose.prod.yml up` + `alembic upgrade head`.
+2. Wire Austin to pack **v1.1** + memorial/SSE (`member.died`, `legacy.passed`).
+3. Point `CYREX_URL` / `CYREX_API_KEY` at staging and run `POST /city/cyrex/sync` (dry_run first).
+4. Optional: remove deprecated `persola/db/tables.py` / `config.py` after one release.

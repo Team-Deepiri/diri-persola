@@ -176,6 +176,10 @@ Natural end of an agent’s active life. Payload: `member_id`, `generation`, `go
 
 Knowledge/personality handoff to the next generation. Payload: `from_member_id`, `to_member_id`, `generation`, `goals`, `tool_tags`.
 
+### `cyrex.sync.finished`
+
+Bulk Cyrex push for a family finished. Payload: `synced`, `failed`, `skipped`, `living_only`.
+
 ### `viz.pulse` / `viz.custom`
 
 Optional viz-only pulses from `emit_viz_event` (allowlisted).
