@@ -266,7 +266,7 @@ docs/
 - [x] **P1** City schema + `/api/v1/city` CRUD/lineage/jobs
 - [x] **P2** `workspace_*` + sandboxed `run_python` + orchestrator tool calls
 - [x] **P3** Wedge demo: one family builds and runs; UI City mode
-- [ ] **P4** City graph + live events; Austin contract documented
+- [x] **P4** City graph + live events; Austin contract documented
 - [ ] **P5** Scale path to ~100 with workers/districts/metrics
 
 ---

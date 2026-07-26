@@ -281,3 +281,91 @@
   font-weight: 600;
   color: #0f172a;
 }
+
+.live-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: #334155;
+  margin-right: 4px;
+}
+
+.graph-panel {
+  background: linear-gradient(180deg, #f1f5f9 0%, #f8fafc 55%, #fff 100%);
+}
+
+.city-graph {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+}
+
+.city-graph.empty {
+  padding: 40px;
+  text-align: center;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.city-edge {
+  stroke: #94a3b8;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.city-node {
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.city-node-label {
+  fill: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.city-node-name {
+  fill: #334155;
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.city-pulse {
+  opacity: 0.85;
+  transform-origin: center;
+  animation: cityPulse 1.4s ease-out infinite;
+}
+
+.city-pulse.pulse-write {
+  stroke-width: 2;
+}
+
+.city-pulse.pulse-run {
+  stroke-width: 3;
+}
+
+.city-pulse.pulse-spawn,
+.city-pulse.pulse-merge {
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+}
+
+@keyframes cityPulse {
+  0% {
+    r: 24;
+    opacity: 0.9;
+  }
+  100% {
+    r: 42;
+    opacity: 0;
+  }
+}
+
+.city-sub code {
+  font-size: 0.78rem;
+  background: #e2e8f0;
+  padding: 1px 6px;
+  border-radius: 4px;
+}

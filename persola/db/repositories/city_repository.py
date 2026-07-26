@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -165,5 +166,41 @@ class CityEventRepository(BaseRepository[CityEventModel]):
 			.order_by(CityEventModel.created_at.asc())
 			.limit(limit)
 		)
+		result = await self.session.execute(query)
+		return list(result.scalars().all())
+
+	async def list_since(
+		self,
+		*,
+		family_id: UUID | None = None,
+		job_id: UUID | None = None,
+		after_id: UUID | None = None,
+		since: datetime | None = None,
+		limit: int = 100,
+	) -> list[CityEventModel]:
+		filters = []
+		if family_id is not None:
+			filters.append(CityEventModel.family_id == family_id)
+		if job_id is not None:
+			filters.append(CityEventModel.job_id == job_id)
+		if after_id is not None:
+			anchor = await self.get(after_id)
+			if anchor is not None:
+				filters.append(
+					or_(
+						CityEventModel.created_at > anchor.created_at,
+						and_(
+							CityEventModel.created_at == anchor.created_at,
+							CityEventModel.id > anchor.id,
+						),
+					)
+				)
+		elif since is not None:
+			filters.append(CityEventModel.created_at > since)
+
+		query = select(CityEventModel)
+		if filters:
+			query = query.where(and_(*filters))
+		query = query.order_by(CityEventModel.created_at.asc(), CityEventModel.id.asc()).limit(limit)
 		result = await self.session.execute(query)
 		return list(result.scalars().all())

@@ -377,3 +377,112 @@ async def run_wedge_demo(
 		await db.rollback()
 		status = 404 if "not found" in str(exc).lower() else 400
 		raise HTTPException(status_code=status, detail=str(exc)) from exc
+
+
+@router.get("/events")
+async def poll_city_events(
+	family_id: Optional[str] = None,
+	job_id: Optional[str] = None,
+	after: Optional[str] = None,
+	since: Optional[str] = None,
+	limit: int = 100,
+	db: AsyncSession = Depends(get_db),
+):
+	"""
+	Incremental event poll for live UIs / Austin (≤2s client poll).
+
+	Pass ``family_id`` and/or ``job_id``. Cursor via ``after`` (event id) or ``since`` (ISO datetime).
+	"""
+	from datetime import datetime
+
+	service = CityService(db)
+	try:
+		since_dt = datetime.fromisoformat(since.replace("Z", "+00:00")) if since else None
+		rows = await service.list_events_since(
+			family_id=UUID(family_id) if family_id else None,
+			job_id=UUID(job_id) if job_id else None,
+			after_id=UUID(after) if after else None,
+			since=since_dt,
+			limit=min(max(limit, 1), 500),
+		)
+		return {"events": rows, "count": len(rows)}
+	except ValueError as exc:
+		status = 404 if "not found" in str(exc).lower() else 400
+		raise HTTPException(status_code=status, detail=str(exc)) from exc
+	except Exception as exc:
+		raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/events/stream")
+async def stream_city_events(
+	family_id: Optional[str] = None,
+	job_id: Optional[str] = None,
+	after: Optional[str] = None,
+	poll_seconds: float = 1.0,
+	max_cycles: int = 0,
+):
+	"""
+	Server-Sent Events stream of city events (Austin live contract).
+
+	Each message is ``event: city`` with JSON data matching docs/CITY_EVENTS.md.
+	Set ``max_cycles`` > 0 to end the stream after N poll loops (tests / finite clients).
+	"""
+	import asyncio
+	import json
+	from datetime import datetime
+
+	from fastapi.responses import StreamingResponse
+
+	from ..db.database import AsyncSessionLocal
+
+	if not family_id and not job_id:
+		raise HTTPException(status_code=400, detail="family_id or job_id required")
+
+	family_uuid = UUID(family_id) if family_id else None
+	job_uuid = UUID(job_id) if job_id else None
+	after_uuid = UUID(after) if after else None
+	interval = min(max(poll_seconds, 0.25), 5.0)
+	cycles_limit = max(0, int(max_cycles))
+
+	async def event_generator():
+		cursor = after_uuid
+		hello = {
+			"event_type": "stream.hello",
+			"payload": {"family_id": family_id, "job_id": job_id},
+			"created_at": datetime.utcnow().isoformat(),
+		}
+		yield f"event: city\ndata: {json.dumps(hello)}\n\n"
+		cycles = 0
+		while True:
+			try:
+				async with AsyncSessionLocal() as session:
+					service = CityService(session)
+					rows = await service.list_events_since(
+						family_id=family_uuid,
+						job_id=job_uuid,
+						after_id=cursor,
+						limit=50,
+					)
+				for row in rows:
+					yield f"event: city\ndata: {json.dumps(row)}\n\n"
+					cursor = UUID(row["id"])
+				yield ": keepalive\n\n"
+			except Exception as exc:  # noqa: BLE001
+				err = {"event_type": "stream.error", "payload": {"detail": str(exc)}}
+				yield f"event: city\ndata: {json.dumps(err)}\n\n"
+			cycles += 1
+			if cycles_limit and cycles >= cycles_limit:
+				done = {"event_type": "stream.done", "payload": {"cycles": cycles}}
+				yield f"event: city\ndata: {json.dumps(done)}\n\n"
+				break
+			await asyncio.sleep(interval)
+
+	return StreamingResponse(
+		event_generator(),
+		media_type="text/event-stream",
+		headers={
+			"Cache-Control": "no-cache",
+			"Connection": "keep-alive",
+			"X-Accel-Buffering": "no",
+		},
+	)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -512,6 +513,31 @@ class CityService:
 			rows = await self.events.list_for_family(family_id, limit=limit)
 		else:
 			raise ValueError("job_id or family_id required")
+		return [self._serialize_event(r) for r in rows]
+
+	async def list_events_since(
+		self,
+		*,
+		family_id: UUID | None = None,
+		job_id: UUID | None = None,
+		after_id: UUID | None = None,
+		since: datetime | None = None,
+		limit: int = 100,
+	) -> list[dict[str, Any]]:
+		"""Incremental event fetch for SSE / polling (Austin live stream)."""
+		if family_id is None and job_id is None:
+			raise ValueError("family_id or job_id required")
+		if family_id is not None and await self.families.get(family_id) is None:
+			raise ValueError("Family not found")
+		if job_id is not None and await self.jobs.get(job_id) is None:
+			raise ValueError("Job not found")
+		rows = await self.events.list_since(
+			family_id=family_id,
+			job_id=job_id,
+			after_id=after_id,
+			since=since,
+			limit=limit,
+		)
 		return [self._serialize_event(r) for r in rows]
 
 	# ── Commons helpers for Phase 2 (usable now for persistence tests) ──

@@ -1,5 +1,6 @@
 import axios from 'axios';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CityGraph, type GraphPulse } from './CityGraph';
 import './CityView.css';
 
 type FamilySummary = {
@@ -47,10 +48,12 @@ type Run = {
 };
 
 type CityEvent = {
-  id: string;
+  id?: string;
   event_type: string;
   payload: Record<string, unknown>;
   created_at: string | null;
+  family_id?: string | null;
+  job_id?: string | null;
 };
 
 type Job = {
@@ -98,6 +101,19 @@ function shortId(id: string | null | undefined) {
   return id.slice(0, 8);
 }
 
+function pulseFromEvent(ev: CityEvent): GraphPulse | null {
+  const agentId = (ev.payload?.agent_id as string | undefined) ?? null;
+  if (!agentId) return null;
+  const t = ev.event_type;
+  let kind: GraphPulse['kind'] | null = null;
+  if (t === 'artifact.written') kind = 'write';
+  else if (t === 'run.started' || t === 'run.finished') kind = 'run';
+  else if (t === 'agent.spawned') kind = 'spawn';
+  else if (t === 'cohesion.merge' || t === 'viz.pulse') kind = 'merge';
+  if (!kind) return null;
+  return { agentId, kind, at: Date.now() };
+}
+
 export function CityView() {
   const [families, setFamilies] = useState<FamilySummary[]>([]);
   const [family, setFamily] = useState<FamilyDetail | null>(null);
@@ -105,10 +121,14 @@ export function CityView() {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [events, setEvents] = useState<CityEvent[]>([]);
+  const [pulses, setPulses] = useState<GraphPulse[]>([]);
+  const [live, setLive] = useState(true);
   const [goal, setGoal] = useState('Build hello.py in the commons and run it; siblings leave notes.');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statusLine, setStatusLine] = useState<string | null>(null);
+  const cursorRef = useRef<string | null>(null);
+  const jobIdRef = useRef<string | null>(null);
 
   const agentNameById = useMemo(() => {
     const map: Record<string, string> = {};
@@ -123,13 +143,24 @@ export function CityView() {
     setFamilies(data);
   }, []);
 
-  const selectFamily = useCallback(async (id: string) => {
-    const { data } = await api.get<FamilyDetail>(`/city/families/${id}`);
-    setFamily(data);
-    setJob(null);
-    setArtifacts([]);
-    setRuns([]);
-    setEvents([]);
+  const ingestEvents = useCallback((incoming: CityEvent[]) => {
+    if (!incoming.length) return;
+    setEvents((prev) => {
+      const seen = new Set(prev.map((e) => e.id).filter(Boolean));
+      const merged = [...prev];
+      for (const ev of incoming) {
+        if (ev.id && seen.has(ev.id)) continue;
+        if (ev.id) seen.add(ev.id);
+        merged.push(ev);
+        const pulse = pulseFromEvent(ev);
+        if (pulse) {
+          setPulses((p) => [...p.slice(-40), pulse]);
+        }
+      }
+      return merged.slice(-200);
+    });
+    const last = incoming[incoming.length - 1];
+    if (last?.id) cursorRef.current = last.id;
   }, []);
 
   const refreshJobViews = useCallback(async (jobId: string) => {
@@ -143,11 +174,63 @@ export function CityView() {
     setArtifacts(arts.data);
     setRuns(runRes.data);
     setEvents(evRes.data);
+    if (evRes.data.length) {
+      cursorRef.current = evRes.data[evRes.data.length - 1]?.id ?? null;
+    }
+  }, []);
+
+  const selectFamily = useCallback(async (id: string) => {
+    const { data } = await api.get<FamilyDetail>(`/city/families/${id}`);
+    setFamily(data);
+    setJob(null);
+    jobIdRef.current = null;
+    setArtifacts([]);
+    setRuns([]);
+    setEvents([]);
+    setPulses([]);
+    cursorRef.current = null;
   }, []);
 
   useEffect(() => {
     loadFamilies().catch(() => setFamilies([]));
   }, [loadFamilies]);
+
+  // Live poll ≤2s (Austin-compatible /events cursor API). SSE also available at /events/stream.
+  useEffect(() => {
+    if (!live || !family?.id) return;
+    let cancelled = false;
+
+    const tick = async () => {
+      try {
+        const params: Record<string, string> = { family_id: family.id, limit: '50' };
+        if (cursorRef.current) params.after = cursorRef.current;
+        const { data } = await api.get<{ events: CityEvent[] }>('/city/events', { params });
+        if (cancelled) return;
+        ingestEvents(data.events || []);
+        if (jobIdRef.current) {
+          const [arts, runRes, jobRes] = await Promise.all([
+            api.get<Artifact[]>(`/city/jobs/${jobIdRef.current}/artifacts`),
+            api.get<Run[]>(`/city/jobs/${jobIdRef.current}/runs`),
+            api.get<Job>(`/city/jobs/${jobIdRef.current}`),
+          ]);
+          if (!cancelled) {
+            setArtifacts(arts.data);
+            setRuns(runRes.data);
+            setJob(jobRes.data);
+          }
+        }
+      } catch {
+        /* keep polling */
+      }
+    };
+
+    tick();
+    const id = window.setInterval(tick, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [live, family?.id, ingestEvents]);
 
   const onSeed = async () => {
     setLoading(true);
@@ -158,8 +241,14 @@ export function CityView() {
         name: `Wedge City ${new Date().toLocaleTimeString()}`,
       });
       setFamily(data);
+      cursorRef.current = null;
       await loadFamilies();
-      setStatusLine(`Seeded family with ${data.members.length} members.`);
+      const { data: ev } = await api.get<{ events: CityEvent[] }>('/city/events', {
+        params: { family_id: data.id, limit: '100' },
+      });
+      setEvents(ev.events || []);
+      if (ev.events?.length) cursorRef.current = ev.events[ev.events.length - 1].id ?? null;
+      setStatusLine(`Seeded family with ${data.members.length} members — watch the graph.`);
     } catch (err) {
       setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
     } finally {
@@ -178,8 +267,9 @@ export function CityView() {
         district: 'build',
       });
       setJob(data);
+      jobIdRef.current = data.id;
       await refreshJobViews(data.id);
-      setStatusLine('Job started (pending). Run the wedge demo to build & execute.');
+      setStatusLine('Job started — live events will pulse the graph.');
     } catch (err) {
       setError(axios.isAxiosError(err) ? err.response?.data?.detail ?? err.message : String(err));
     } finally {
@@ -198,13 +288,26 @@ export function CityView() {
       });
       setFamily(data.family);
       setJob(data.job);
+      jobIdRef.current = data.job.id;
       setArtifacts(data.artifacts);
       setRuns(data.runs);
       setEvents(data.events);
+      if (data.events.length) {
+        cursorRef.current = data.events[data.events.length - 1]?.id ?? null;
+        const now = Date.now();
+        setPulses(
+          data.events
+            .map((e, i) => {
+              const p = pulseFromEvent(e);
+              return p ? { ...p, at: now - (data.events.length - i) * 80 } : null;
+            })
+            .filter(Boolean) as GraphPulse[],
+        );
+      }
       await loadFamilies();
       setStatusLine(
         data.success
-          ? 'Wedge demo succeeded — siblings wrote notes; executor built and ran hello.py.'
+          ? 'Wedge demo succeeded — graph pulses show who built and ran.'
           : 'Wedge demo finished with failures — check runs.',
       );
     } catch (err) {
@@ -220,10 +323,15 @@ export function CityView() {
         <div>
           <h1>City</h1>
           <p className="city-sub">
-            Communal agents — families, shared commons, build and run. Phase 3 wedge demo.
+            Living agent society — lineage graph, shared commons, build/run pulses. Event stream for
+            Austin: <code>/api/v1/city/events</code>.
           </p>
         </div>
         <div className="city-actions">
+          <label className="live-toggle">
+            <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
+            Live
+          </label>
           <button type="button" className="btn ghost" onClick={onSeed} disabled={loading}>
             Seed family
           </button>
@@ -257,12 +365,17 @@ export function CityView() {
         </aside>
 
         <section className="city-main">
+          <div className="panel graph-panel">
+            <div className="panel-head">
+              <h2>Lineage graph {family ? `· ${family.name}` : ''}</h2>
+              {family && <span className="pill">{family.members.length} agents</span>}
+            </div>
+            <CityGraph members={family?.members ?? []} pulses={pulses} />
+          </div>
+
           <div className="panel">
             <div className="panel-head">
-              <h2>Roster {family ? `· ${family.name}` : ''}</h2>
-              {family && (
-                <span className="pill">{family.members.length} agents</span>
-              )}
+              <h2>Roster</h2>
             </div>
             {!family && <p className="muted">Select or seed a family to see lineage.</p>}
             {family && (
@@ -393,15 +506,15 @@ export function CityView() {
         </section>
 
         <aside className="city-events">
-          <h2>Events</h2>
+          <h2>Live events</h2>
           <ul className="event-feed">
-            {events.map((e) => (
-              <li key={e.id}>
+            {[...events].reverse().map((e, idx) => (
+              <li key={e.id ?? `${e.event_type}-${idx}`}>
                 <div className="event-type">{e.event_type}</div>
                 <div className="muted">{e.created_at ? new Date(e.created_at).toLocaleTimeString() : ''}</div>
               </li>
             ))}
-            {events.length === 0 && <li className="muted">Events appear after a job runs.</li>}
+            {events.length === 0 && <li className="muted">Events appear as the city works.</li>}
           </ul>
         </aside>
       </div>

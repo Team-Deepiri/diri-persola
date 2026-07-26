@@ -91,6 +91,15 @@ export const cityApi = {
   listArtifacts: (jobId: string) => api.get(`/city/jobs/${jobId}/artifacts`),
   listRuns: (jobId: string) => api.get(`/city/jobs/${jobId}/runs`),
   listEvents: (jobId: string) => api.get(`/city/jobs/${jobId}/events`),
+  pollEvents: (params: { family_id?: string; job_id?: string; after?: string; since?: string; limit?: number }) =>
+    api.get('/city/events', { params }),
+  eventsStreamUrl: (params: { family_id?: string; job_id?: string; after?: string }) => {
+    const q = new URLSearchParams();
+    if (params.family_id) q.set('family_id', params.family_id);
+    if (params.job_id) q.set('job_id', params.job_id);
+    if (params.after) q.set('after', params.after);
+    return `/api/v1/city/events/stream?${q.toString()}`;
+  },
   listTools: () => api.get('/city/tools'),
 };
 
