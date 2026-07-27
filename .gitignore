@@ -43,3 +43,8 @@ ENV/
 
 # Keep poetry lock
 !poetry.lock
+
+# Local runtime settings / secrets (LLM provider keys, etc.)
+.persola/
+.env.local
+.env.*.local

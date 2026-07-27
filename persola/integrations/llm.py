@@ -1,337 +1,420 @@
 """
-LLM Integration for Persola
-Uses Ollama by default, falls back to OpenAI/Anthropic if API keys are provided
+LLM Integration for Persola.
+
+Providers: ollama (local), openai, anthropic, gemini, openrouter.
+Active selection comes from ``llm_settings`` (UI / .persola/settings.json / env).
 """
-from typing import Optional, Dict, Any, AsyncGenerator
+
+from __future__ import annotations
+
+import json
 import os
-import structlog
+from typing import Any, AsyncGenerator, Optional
+
 import httpx
+import structlog
+
+from .llm_settings import load_llm_settings
 
 log = structlog.get_logger("persola.llm")
 
 
 class OllamaClient:
-    """Simple Ollama client using httpx"""
-    
-    def __init__(
-        self,
-        model: str = "llama3:8b",
-        base_url: Optional[str] = None,
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        timeout: int = 300,
-    ):
-        self.model = model
-        self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.timeout = timeout
-    
-    def is_available(self) -> bool:
-        """Check if Ollama is available"""
-        try:
-            import requests
-            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
-            return resp.status_code == 200
-        except (ImportError, requests.RequestException):
-            return False
-    
-    async def generate(self, prompt: str) -> str:
-        """Generate text from prompt"""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens,
-                    "stream": False,
-                }
-            )
-            response.raise_for_status()
-            return response.json().get("response", "")
-    
-    async def generate_streaming(self, prompt: str) -> AsyncGenerator[str, None]:
-        """Generate text with streaming"""
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens,
-                    "stream": True,
-                }
-            ) as response:
-                async for line in response.aiter_lines():
-                    if line.strip():
-                        try:
-                            data = line.strip()
-                            if '"response"' in data:
-                                import json
-                                j = json.loads(data)
-                                if "response" in j:
-                                    yield j["response"]
-                        except (ValueError, TypeError) as exc:
-                            log.debug("Skipping non-JSON or malformed streaming chunk", error=str(exc), chunk=line)
+	"""Ollama HTTP client (local or remote)."""
 
-    async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
-        """Send a conversation using the Ollama /api/chat endpoint."""
-        formatted: list[dict] = []
-        if system_prompt:
-            formatted.append({"role": "system", "content": system_prompt})
-        formatted.extend(messages)
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/api/chat",
-                json={
-                    "model": self.model,
-                    "messages": formatted,
-                    "options": {
-                        "temperature": self.temperature,
-                        "num_predict": self.max_tokens,
-                    },
-                    "stream": False,
-                },
-            )
-            response.raise_for_status()
-            return response.json().get("message", {}).get("content", "")
+	def __init__(
+		self,
+		model: str = "qwen3-coder:30b",
+		base_url: Optional[str] = None,
+		temperature: float = 0.7,
+		max_tokens: int = 2000,
+		timeout: int = 300,
+	):
+		settings = load_llm_settings()
+		self.model = model
+		self.base_url = (
+			base_url
+			or settings.ollama_base_url
+			or os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+		).rstrip("/")
+		self.temperature = temperature
+		self.max_tokens = max_tokens
+		self.timeout = timeout
+
+	def is_available(self) -> bool:
+		try:
+			with httpx.Client(timeout=5.0) as client:
+				resp = client.get(f"{self.base_url}/api/tags")
+				return resp.status_code == 200
+		except Exception:
+			return False
+
+	async def list_models(self) -> list[str]:
+		async with httpx.AsyncClient(timeout=10.0) as client:
+			resp = await client.get(f"{self.base_url}/api/tags")
+			resp.raise_for_status()
+			models = resp.json().get("models") or []
+			return [m.get("name") or m.get("model") for m in models if m.get("name") or m.get("model")]
+
+	async def generate(self, prompt: str) -> str:
+		async with httpx.AsyncClient(timeout=self.timeout) as client:
+			response = await client.post(
+				f"{self.base_url}/api/generate",
+				json={
+					"model": self.model,
+					"prompt": prompt,
+					"options": {
+						"temperature": self.temperature,
+						"num_predict": self.max_tokens,
+					},
+					"stream": False,
+				},
+			)
+			response.raise_for_status()
+			return response.json().get("response", "")
+
+	async def generate_streaming(self, prompt: str) -> AsyncGenerator[str, None]:
+		async with httpx.AsyncClient(timeout=self.timeout) as client:
+			async with client.stream(
+				"POST",
+				f"{self.base_url}/api/generate",
+				json={
+					"model": self.model,
+					"prompt": prompt,
+					"options": {
+						"temperature": self.temperature,
+						"num_predict": self.max_tokens,
+					},
+					"stream": True,
+				},
+			) as response:
+				async for line in response.aiter_lines():
+					if not line.strip():
+						continue
+					try:
+						j = json.loads(line)
+						if "response" in j:
+							yield j["response"]
+					except (ValueError, TypeError) as exc:
+						log.debug("ollama.stream.skip", error=str(exc))
+
+	async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+		formatted: list[dict] = []
+		if system_prompt:
+			formatted.append({"role": "system", "content": system_prompt})
+		formatted.extend(messages)
+		async with httpx.AsyncClient(timeout=self.timeout) as client:
+			response = await client.post(
+				f"{self.base_url}/api/chat",
+				json={
+					"model": self.model,
+					"messages": formatted,
+					"options": {
+						"temperature": self.temperature,
+						"num_predict": self.max_tokens,
+					},
+					"stream": False,
+				},
+			)
+			response.raise_for_status()
+			return response.json().get("message", {}).get("content", "")
 
 
-class OpenAIClientWrapper:
-    """Wrapper around OpenAI SDK"""
-    
-    def __init__(
-        self,
-        model: str = "gpt-4o-mini",
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-    ):
-        self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self._client = None
-    
-    def is_available(self) -> bool:
-        return bool(os.getenv("OPENAI_API_KEY"))
-    
-    def _get_client(self):
-        if self._client is None:
-            from openai import OpenAI
-            self._client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        return self._client
-    
-    async def generate(self, prompt: str) -> str:
-        client = self._get_client()
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-        return response.choices[0].message.content
+class OpenAICompatibleClient:
+	"""OpenAI SDK wrapper — also used for OpenRouter / custom base URLs."""
 
-    async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
-        """Send a conversation using the OpenAI chat completions API."""
-        formatted: list[dict] = []
-        if system_prompt:
-            formatted.append({"role": "system", "content": system_prompt})
-        formatted.extend(messages)
-        client = self._get_client()
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=formatted,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-        return response.choices[0].message.content
+	def __init__(
+		self,
+		*,
+		provider_label: str,
+		model: str,
+		api_key: str,
+		base_url: str | None = None,
+		temperature: float = 0.7,
+		max_tokens: int = 2000,
+	):
+		self.provider_label = provider_label
+		self.model = model
+		self.api_key = api_key
+		self.base_url = (base_url or "").rstrip("/") or None
+		self.temperature = temperature
+		self.max_tokens = max_tokens
+		self._client = None
+
+	def is_available(self) -> bool:
+		return bool(self.api_key)
+
+	def _get_client(self):
+		if self._client is None:
+			from openai import OpenAI
+
+			kwargs: dict[str, Any] = {"api_key": self.api_key}
+			if self.base_url:
+				kwargs["base_url"] = self.base_url
+			self._client = OpenAI(**kwargs)
+		return self._client
+
+	async def generate(self, prompt: str) -> str:
+		return await self.chat([{"role": "user", "content": prompt}])
+
+	async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+		formatted: list[dict] = []
+		if system_prompt:
+			formatted.append({"role": "system", "content": system_prompt})
+		formatted.extend(messages)
+		client = self._get_client()
+		response = client.chat.completions.create(
+			model=self.model,
+			messages=formatted,
+			temperature=self.temperature,
+			max_tokens=self.max_tokens,
+		)
+		return response.choices[0].message.content or ""
 
 
 class AnthropicClientWrapper:
-    """Wrapper around Anthropic SDK"""
-    
-    def __init__(
-        self,
-        model: str = "claude-3-sonnet-20240229",
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-    ):
-        self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self._client = None
-    
-    def is_available(self) -> bool:
-        return bool(os.getenv("ANTHROPIC_API_KEY"))
-    
-    def _get_client(self):
-        if self._client is None:
-            import anthropic
-            self._client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        return self._client
-    
-    async def generate(self, prompt: str) -> str:
-        client = self._get_client()
-        response = client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.content[0].text
+	def __init__(
+		self,
+		model: str = "claude-sonnet-4-20250514",
+		api_key: str = "",
+		temperature: float = 0.7,
+		max_tokens: int = 2000,
+	):
+		self.model = model
+		self.api_key = api_key
+		self.temperature = temperature
+		self.max_tokens = max_tokens
+		self._client = None
 
-    async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
-        """Send a conversation using the Anthropic messages API."""
-        client = self._get_client()
-        kwargs: dict = {}
-        if system_prompt:
-            kwargs["system"] = system_prompt
-        response = client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            messages=messages,
-            **kwargs,
-        )
-        return response.content[0].text
+	def is_available(self) -> bool:
+		return bool(self.api_key)
+
+	def _get_client(self):
+		if self._client is None:
+			import anthropic
+
+			self._client = anthropic.Anthropic(api_key=self.api_key)
+		return self._client
+
+	async def generate(self, prompt: str) -> str:
+		return await self.chat([{"role": "user", "content": prompt}])
+
+	async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+		client = self._get_client()
+		kwargs: dict[str, Any] = {}
+		if system_prompt:
+			kwargs["system"] = system_prompt
+		response = client.messages.create(
+			model=self.model,
+			max_tokens=self.max_tokens,
+			temperature=self.temperature,
+			messages=messages,
+			**kwargs,
+		)
+		return response.content[0].text
+
+
+class GeminiClient:
+	"""Google Gemini generateContent via REST (no heavy SDK required)."""
+
+	def __init__(
+		self,
+		model: str = "gemini-2.0-flash",
+		api_key: str = "",
+		temperature: float = 0.7,
+		max_tokens: int = 2000,
+	):
+		self.model = model
+		self.api_key = api_key
+		self.temperature = temperature
+		self.max_tokens = max_tokens
+
+	def is_available(self) -> bool:
+		return bool(self.api_key)
+
+	async def generate(self, prompt: str) -> str:
+		return await self.chat([{"role": "user", "content": prompt}])
+
+	async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+		contents = []
+		for msg in messages:
+			role = "user" if msg.get("role") != "assistant" else "model"
+			contents.append({"role": role, "parts": [{"text": msg.get("content", "")}]})
+		body: dict[str, Any] = {
+			"contents": contents,
+			"generationConfig": {
+				"temperature": self.temperature,
+				"maxOutputTokens": self.max_tokens,
+			},
+		}
+		if system_prompt:
+			body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
+		url = (
+			f"https://generativelanguage.googleapis.com/v1beta/models/"
+			f"{self.model}:generateContent"
+		)
+		async with httpx.AsyncClient(timeout=120.0) as client:
+			resp = await client.post(url, params={"key": self.api_key}, json=body)
+			resp.raise_for_status()
+			data = resp.json()
+			candidates = data.get("candidates") or []
+			if not candidates:
+				return ""
+			parts = (candidates[0].get("content") or {}).get("parts") or []
+			return "".join(p.get("text", "") for p in parts)
+
+
+# Back-compat alias
+OpenAIClientWrapper = OpenAICompatibleClient
 
 
 class PersolaLLM:
-    """
-    Unified LLM interface for Persola
-    Automatically selects provider based on available API keys and settings
-    Priority: OpenAI > Anthropic > Ollama
-    """
-    
-    def __init__(
-        self,
-        provider: str = "auto",
-        model: str = "llama3:8b",
-        temperature: float = 0.7,
-        max_tokens: int = 2000,
-        **kwargs
-    ):
-        self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.kwargs = kwargs
-        self._provider = None
-        self._provider_type = None
-        
-        self._initialize_provider(provider)
-    
-    def _initialize_provider(self, provider: str):
-        """Initialize the appropriate LLM provider"""
-        
-        if provider == "auto":
-            if os.getenv("OPENAI_API_KEY"):
-                provider = "openai"
-            elif os.getenv("ANTHROPIC_API_KEY"):
-                provider = "anthropic"
-            else:
-                provider = "ollama"
-        
-        self._provider_type = provider
-        
-        if provider == "openai":
-            self._provider = OpenAIClientWrapper(
-                model=self.model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
-            log.info("llm.init", provider="openai", model=self.model)
-            
-        elif provider == "anthropic":
-            self._provider = AnthropicClientWrapper(
-                model=self.model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
-            log.info("llm.init", provider="anthropic", model=self.model)
-            
-        elif provider == "ollama":
-            self._provider = OllamaClient(
-                model=self.model,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
-            log.info("llm.init", provider="ollama", model=self.model)
-    
-    def get_provider_type(self) -> str:
-        return self._provider_type or "unknown"
-    
-    def is_available(self) -> bool:
-        """Check if the provider is available"""
-        if self._provider is None:
-            return False
-        return self._provider.is_available()
-    
-    async def generate(self, prompt: str) -> str:
-        """Generate text from prompt"""
-        if self._provider is None:
-            raise RuntimeError("No provider initialized")
-        return await self._provider.generate(prompt)
-    
-    async def generate_streaming(self, prompt: str) -> AsyncGenerator[str, None]:
-        """Generate text with streaming"""
-        if hasattr(self._provider, 'generate_streaming'):
-            async for chunk in self._provider.generate_streaming(prompt):
-                yield chunk
-        else:
-            result = await self.generate(prompt)
-            yield result
+	"""Unified LLM interface. Provider comes from settings unless overridden."""
 
-    async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
-        """Send a conversation using the native chat format of the underlying provider."""
-        if self._provider is None:
-            raise RuntimeError("No provider initialized")
-        if hasattr(self._provider, "chat"):
-            return await self._provider.chat(messages, system_prompt=system_prompt)
-        # Fallback: format messages as a single prompt for providers without a chat method
-        parts: list[str] = []
-        if system_prompt:
-            parts.append(f"System: {system_prompt}\n")
-        for msg in messages:
-            role = msg.get("role", "user").capitalize()
-            parts.append(f"{role}: {msg.get('content', '')}")
-        parts.append("Assistant:")
-        return await self._provider.generate("\n".join(parts))
+	def __init__(
+		self,
+		provider: str = "auto",
+		model: str | None = None,
+		temperature: float | None = None,
+		max_tokens: int | None = None,
+		**kwargs: Any,
+	):
+		settings = load_llm_settings()
+		self.kwargs = kwargs
+		self._provider = None
+		self._provider_type = None
 
-    def get_config(self) -> Dict[str, Any]:
-        return {
-            "provider": self._provider_type,
-            "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "available": self.is_available(),
-        }
+		if provider == "auto":
+			provider = settings.provider or "ollama"
+
+		self._provider_type = provider.lower()
+		self.model = model or settings.resolved_model(self._provider_type)
+		self.temperature = (
+			temperature if temperature is not None else settings.temperature
+		)
+		self.max_tokens = max_tokens if max_tokens is not None else settings.max_tokens
+		self._initialize_provider(self._provider_type)
+
+	def _initialize_provider(self, provider: str) -> None:
+		settings = load_llm_settings()
+
+		if provider == "openai":
+			self._provider = OpenAICompatibleClient(
+				provider_label="openai",
+				model=self.model,
+				api_key=settings.resolved_api_key("openai"),
+				base_url=settings.openai_base_url or None,
+				temperature=self.temperature,
+				max_tokens=self.max_tokens,
+			)
+		elif provider == "openrouter":
+			self._provider = OpenAICompatibleClient(
+				provider_label="openrouter",
+				model=self.model,
+				api_key=settings.resolved_api_key("openrouter"),
+				base_url=settings.openrouter_base_url
+				or "https://openrouter.ai/api/v1",
+				temperature=self.temperature,
+				max_tokens=self.max_tokens,
+			)
+		elif provider == "anthropic":
+			self._provider = AnthropicClientWrapper(
+				model=self.model,
+				api_key=settings.resolved_api_key("anthropic"),
+				temperature=self.temperature,
+				max_tokens=self.max_tokens,
+			)
+		elif provider == "gemini":
+			self._provider = GeminiClient(
+				model=self.model,
+				api_key=settings.resolved_api_key("gemini"),
+				temperature=self.temperature,
+				max_tokens=self.max_tokens,
+			)
+		elif provider == "ollama":
+			self._provider = OllamaClient(
+				model=self.model,
+				base_url=settings.ollama_base_url,
+				temperature=self.temperature,
+				max_tokens=self.max_tokens,
+			)
+		else:
+			raise ValueError(
+				f"Unknown LLM provider '{provider}'. "
+				"Use ollama, openai, anthropic, gemini, or openrouter."
+			)
+
+		log.info("llm.init", provider=provider, model=self.model)
+
+	def get_provider_type(self) -> str:
+		return self._provider_type or "unknown"
+
+	def is_available(self) -> bool:
+		if self._provider is None:
+			return False
+		return self._provider.is_available()
+
+	async def generate(self, prompt: str) -> str:
+		if self._provider is None:
+			raise RuntimeError("No provider initialized")
+		return await self._provider.generate(prompt)
+
+	async def generate_streaming(self, prompt: str) -> AsyncGenerator[str, None]:
+		if hasattr(self._provider, "generate_streaming"):
+			async for chunk in self._provider.generate_streaming(prompt):
+				yield chunk
+		else:
+			result = await self.generate(prompt)
+			yield result
+
+	async def chat(self, messages: list[dict], system_prompt: str = "") -> str:
+		if self._provider is None:
+			raise RuntimeError("No provider initialized")
+		if hasattr(self._provider, "chat"):
+			return await self._provider.chat(messages, system_prompt=system_prompt)
+		parts: list[str] = []
+		if system_prompt:
+			parts.append(f"System: {system_prompt}\n")
+		for msg in messages:
+			role = msg.get("role", "user").capitalize()
+			parts.append(f"{role}: {msg.get('content', '')}")
+		parts.append("Assistant:")
+		return await self._provider.generate("\n".join(parts))
+
+	def get_config(self) -> dict[str, Any]:
+		return {
+			"provider": self._provider_type,
+			"model": self.model,
+			"temperature": self.temperature,
+			"max_tokens": self.max_tokens,
+			"available": self.is_available(),
+		}
 
 
 def get_llm_provider(
-    provider: str = "auto",
-    model: str = "llama3:8b",
-    temperature: float = 0.7,
-    max_tokens: int = 2000,
+	provider: str = "auto",
+	model: str | None = None,
+	temperature: float | None = None,
+	max_tokens: int | None = None,
 ) -> PersolaLLM:
-    """Factory function to get LLM provider"""
-    return PersolaLLM(
-        provider=provider,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+	"""Factory — respects saved settings when provider/model are auto/None."""
+	return PersolaLLM(
+		provider=provider,
+		model=model,
+		temperature=temperature,
+		max_tokens=max_tokens,
+	)
 
 
 HAS_CYREX = bool(os.getenv("CYREX_URL") and os.getenv("CYREX_API_KEY"))
 
 __all__ = [
-    "PersolaLLM",
-    "get_llm_provider",
-    "HAS_CYREX",
-    "OllamaClient",
-    "OpenAIClientWrapper", 
-    "AnthropicClientWrapper",
+	"PersolaLLM",
+	"get_llm_provider",
+	"HAS_CYREX",
+	"OllamaClient",
+	"OpenAIClientWrapper",
+	"OpenAICompatibleClient",
+	"AnthropicClientWrapper",
+	"GeminiClient",
 ]
