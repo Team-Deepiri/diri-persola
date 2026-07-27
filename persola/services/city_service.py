@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import (
@@ -45,6 +46,8 @@ from ..orchestration.city_life import (
 	mutate_knobs,
 )
 from ..orchestration.city_scale import DEFAULT_SCALE_CONFIG
+
+log = structlog.get_logger("persola.city_service")
 
 DEFAULT_CITY_TOOL_TAGS: list[str] = ["workspace", "run", "memory", "viz"]
 
@@ -117,6 +120,7 @@ class CityService:
 			try:
 				knobs = {**agent.persona.knob_values(), **knobs}
 			except Exception:
+				# Persona row may be partially loaded; keep member overrides only.
 				pass
 		fp = personality_fingerprint(knobs) if knobs else None
 		top = sorted(knobs.items(), key=lambda kv: abs(float(kv[1]) - 0.5), reverse=True)[:5]
@@ -543,8 +547,8 @@ class CityService:
 			from ..metrics import record_city_job
 
 			record_city_job(resolved_district, status)
-		except Exception:
-			pass
+		except Exception as exc:
+			log.warning("city_metric_failed", what="record_city_job", error=str(exc))
 
 		await self.db.commit()
 		await self.db.refresh(job)
@@ -1000,8 +1004,8 @@ class CityService:
 			from ..metrics import record_city_tool_run
 
 			record_city_tool_run(tool, status)
-		except Exception:
-			pass
+		except Exception as exc:
+			log.warning("city_metric_failed", what="record_city_tool_run", error=str(exc))
 		return self._serialize_run(row)
 
 	async def set_job_status(
@@ -1046,8 +1050,8 @@ class CityService:
 			if status == CityJobStatus.COMPLETED.value:
 				score = await self.cohesion_score(job.id)
 				set_city_cohesion_score(score["score"])
-		except Exception:
-			pass
+		except Exception as exc:
+			log.warning("city_metric_failed", what="record_city_job_cohesion", error=str(exc))
 		return self._serialize_job(job)
 
 	async def execute_tool_calls(
@@ -1754,8 +1758,8 @@ class CityService:
 				generation_max=gen_max,
 				efficiency=avg_eff,
 			)
-		except Exception:
-			pass
+		except Exception as exc:
+			log.warning("city_metric_failed", what="set_city_life_vitals", error=str(exc))
 		return {
 			"ecosystems": ecosystems,
 			"city": city,
@@ -1996,8 +2000,8 @@ class CityService:
 
 			record_city_death(died)
 			record_city_succession(born)
-		except Exception:
-			pass
+		except Exception as exc:
+			log.warning("city_metric_failed", what="record_city_death_succession", error=str(exc))
 		proof = {
 			"aged": aged,
 			"died": died,
@@ -2466,8 +2470,8 @@ class CityService:
 			from ..metrics import set_city_active_agents
 
 			set_city_active_agents(total_agents)
-		except Exception:
-			pass
+		except Exception as exc:
+			log.warning("city_metric_failed", what="set_city_active_agents", error=str(exc))
 
 		return {
 			"mode": mode_l,

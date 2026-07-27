@@ -52,11 +52,12 @@ def parse_tool_calls(text: str) -> list[dict[str, Any]]:
 	stripped = text.strip()
 	calls: list[dict[str, Any]] = []
 
-	# Whole-message JSON
+	# Whole-message JSON — malformed payloads are skipped (LLM output is noisy).
 	if stripped.startswith("{") or stripped.startswith("["):
 		try:
 			calls.extend(_normalize_calls(json.loads(stripped)))
 		except json.JSONDecodeError:
+			# Not valid JSON; fall through to fenced / TOOL_CALL line parsers.
 			pass
 
 	# Fenced blocks
@@ -64,6 +65,7 @@ def parse_tool_calls(text: str) -> list[dict[str, Any]]:
 		try:
 			calls.extend(_normalize_calls(json.loads(match.group(1))))
 		except json.JSONDecodeError:
+			# Ignore broken fences; other parsers may still recover calls.
 			continue
 
 	# TOOL_CALL lines
@@ -72,6 +74,7 @@ def parse_tool_calls(text: str) -> list[dict[str, Any]]:
 		try:
 			args = json.loads(match.group(2))
 		except json.JSONDecodeError:
+			# Keep the tool name; empty args beats dropping the call entirely.
 			args = {}
 		if isinstance(args, dict):
 			calls.append({"name": name, "args": args})

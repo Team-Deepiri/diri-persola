@@ -138,3 +138,28 @@ GET /api/v1/city/export/austin
 ```
 
 The Austin pack is a self-contained JSON snapshot (graph, events, artifact samples) for external visualization.
+
+---
+
+## Rate limiting
+
+City HTTP routes use an **in-process** token bucket (`_InMemoryTokenBucket` in `persola/api/city.py`).
+
+| Property | Behavior |
+|----------|----------|
+| Scope | **Process-local** — each worker/replica has its own counters |
+| Shared Redis | **Not used** (keeps city APIs usable without Redis) |
+| Multi-instance | Limits do **not** aggregate across the cluster |
+
+If production needs a global budget behind a load balancer, replace or back this with a distributed limiter (e.g. Redis token bucket / sliding window) and keep the same HTTP 429 contract.
+
+---
+
+## Sandbox security
+
+`run_python_sandboxed` (`persola/orchestration/sandbox.py`) is a **best-effort** runner for communal-city commons:
+
+- Temp workspace + relative path sanitization (no `..` / absolute paths for *tool* paths)
+- Clean child environment, `python -I`, wall-clock timeout, output caps
+
+It is **not** a security boundary against determined untrusted code (network via raw sockets, host FS, resource exhaustion beyond wall-clock timeout). Treat agent-authored scripts as semi-trusted. For hostile multi-tenant workloads, run executions in containers / gVisor / microVMs with CPU and memory limits.

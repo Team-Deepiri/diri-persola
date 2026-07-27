@@ -58,6 +58,39 @@ Here is my plan.
 		calls = parse_tool_calls('TOOL_CALL: run_python({"path": "a.py"})')
 		assert calls == [{"name": "run_python", "args": {"path": "a.py"}}]
 
+	def test_empty_and_whitespace(self):
+		assert parse_tool_calls("") == []
+		assert parse_tool_calls("   \n") == []
+
+	def test_malformed_whole_message_json_returns_empty(self):
+		assert parse_tool_calls("{not-json") == []
+
+	def test_malformed_fence_ignored_tool_line_kept(self):
+		text = """
+```json
+{broken
+```
+TOOL_CALL: memory_store({"key": "k", "value": "v"})
+"""
+		calls = parse_tool_calls(text)
+		assert calls == [{"name": "memory_store", "args": {"key": "k", "value": "v"}}]
+
+	def test_tool_line_with_bad_args_keeps_name(self):
+		calls = parse_tool_calls("TOOL_CALL: emit_viz_event({not-json})")
+		assert calls == [{"name": "emit_viz_event", "args": {}}]
+
+	def test_single_object_without_tool_calls_key(self):
+		calls = parse_tool_calls('{"name": "workspace_list", "args": {"path": "."}}')
+		assert calls == [{"name": "workspace_list", "args": {"path": "."}}]
+
+	def test_dedupes_identical_calls(self):
+		text = """
+{"tool_calls":[{"name":"echo","args":{"x":1}}]}
+TOOL_CALL: echo({"x": 1})
+"""
+		calls = parse_tool_calls(text)
+		assert calls == [{"name": "echo", "args": {"x": 1}}]
+
 
 class TestCityBuildRunFlow:
 	async def test_write_read_run_succeeds(self, db_session):

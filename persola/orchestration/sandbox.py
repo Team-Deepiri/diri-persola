@@ -58,8 +58,18 @@ async def run_python_sandboxed(
 	"""
 	Execute Python source in an isolated temp directory.
 
-	Network is best-effort denied by clearing proxy env vars and using
-	``python -I`` (isolated mode). Wall-clock timeout and stdout/stderr caps apply.
+	**Security assumptions (best-effort, not a hard jail):**
+
+	- Path writes are confined to a fresh ``TemporaryDirectory``.
+	- Child env is rebuilt (no inherited secrets / proxies); ``python -I -B``.
+	- Wall-clock timeout kills the process; stdout/stderr are size-capped.
+	- This does **not** block raw sockets, subprocess escapes, or host FS reads
+	  via absolute paths opened by the child. Determined untrusted code can
+	  still interact with the host OS.
+
+	For production execution of untrusted agent code, use stronger isolation
+	(containers, gVisor, Firecracker, or OS sandboxing) and add CPU/memory
+	cgroups — see ``docs/CITY_SCALE.md`` § Sandbox security.
 	"""
 	rel_name = sanitize_workspace_path(filename)
 	with tempfile.TemporaryDirectory(prefix="persola-city-") as tmp:

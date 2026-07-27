@@ -80,18 +80,15 @@ class TeamOrchestrator:
             parsed = parse_tool_calls(output)
             if parsed:
                 calls = parsed
-            elif role == "executor" and registry.get("workspace_write") is not None:
-                # Executor with city tools but no structured calls: no silent fake tools.
+            else:
+                # Consistent fallback for every role: persist the turn, do not invent
+                # silent ``delegate_subtask`` / workspace writes when the model did
+                # not emit structured tool calls (city or non-city registries).
                 calls = [
                     {
                         "name": "memory_store",
                         "args": {"key": f"{role}:latest", "value": output[:2000], "source_role": role},
                     }
-                ]
-            else:
-                calls = [
-                    {"name": "memory_store", "args": {"key": f"{role}:latest", "value": output[:2000], "source_role": role}},
-                    {"name": "delegate_subtask", "args": {"role": "executor", "subtask": output[:500]}},
                 ]
 
             executor = getattr(registry, "_executor", None)

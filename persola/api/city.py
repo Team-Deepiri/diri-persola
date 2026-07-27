@@ -22,7 +22,13 @@ router = APIRouter(prefix="/api/v1/city", tags=["city"])
 
 
 class _InMemoryTokenBucket:
-	"""Process-local rate limiter so city APIs do not depend on Redis."""
+	"""Process-local rate limiter so city APIs do not depend on Redis.
+
+	Limitation: state is per-process. Multiple uvicorn workers or replicas each
+	keep their own buckets, so this is **not** a global cluster-wide limiter.
+	See ``docs/CITY_SCALE.md`` § Rate limiting. Use Redis (or similar) when
+	horizontal scale needs a shared budget.
+	"""
 
 	def __init__(self, capacity: float = 60.0, refill_rate: float = 1.0) -> None:
 		self.capacity = capacity

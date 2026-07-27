@@ -8,9 +8,12 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncContextManager, Callable
 from uuid import UUID, uuid4
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .city_scale import DEFAULT_SCALE_CONFIG, GLOBAL_GOVERNOR, ScaleConfig, ConcurrencyGovernor
+
+log = structlog.get_logger("persola.city_worker")
 
 SessionFactory = Callable[[], AsyncContextManager[AsyncSession]]
 
@@ -89,8 +92,8 @@ class CityWorkerPool:
 			from ..metrics import set_city_queue_depth
 
 			set_city_queue_depth(self.queue_depth)
-		except Exception:
-			pass
+		except Exception as exc:
+			log.warning("city_metric_failed", what="set_city_queue_depth", error=str(exc))
 		return item
 
 	async def enqueue_and_wait(self, item: CityWorkItem, *, timeout: float = 60.0) -> CityWorkItem:
