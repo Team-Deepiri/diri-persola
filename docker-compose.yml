@@ -21,7 +21,7 @@ services:
     volumes:
       - persola_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deepiri}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deepiri} -d ${POSTGRES_DB:-persola}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -31,7 +31,7 @@ services:
 
   persola:
     build:
-      context: ./diri-persola
+      context: .
       dockerfile: docker/Dockerfile
     image: diri-persola-dev-api:latest
     pull_policy: never
@@ -46,26 +46,21 @@ services:
       DEBUG: "true"
       CORS_ORIGIN: "*"
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-deepiri}:${POSTGRES_PASSWORD:-deepiripassword}@persola-db:5432/${POSTGRES_DB:-persola}
-      POSTGRES_HOST: ${PERSOLA_POSTGRES_HOST:-host.docker.internal}
-      POSTGRES_PORT: ${PERSOLA_POSTGRES_PORT:-5434}
-      POSTGRES_DB: ${POSTGRES_CYREX_DB:-cyrex_db}
-      POSTGRES_USER: ${POSTGRES_CYREX_USER:-deepiri_cyrex}
-      POSTGRES_PASSWORD: ${POSTGRES_CYREX_PASSWORD:-deepiripassword}
-      REDIS_HOST: ${PERSOLA_REDIS_HOST:-host.docker.internal}
-      REDIS_PORT: ${PERSOLA_REDIS_PORT:-6380}
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-redispassword}
       OLLAMA_BASE_URL: ${PERSOLA_OLLAMA_BASE_URL:-http://host.docker.internal:11435}
       DEFAULT_MODEL: llama3:8b
       DEFAULT_PROVIDER: ollama
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CYREX_URL: ${CYREX_URL:-}
+      CYREX_API_KEY: ${CYREX_API_KEY:-}
+      PERSOLA_CITY_COMMONS_ROOT: ${PERSOLA_CITY_COMMONS_ROOT:-}
     ports:
       - "8010:8002"
     volumes:
-      - ./diri-persola:/app
+      - ./:/app
     command: uvicorn persola.api.main:app --host 0.0.0.0 --port 8002 --reload
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8002/api/v1/city/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -76,11 +71,9 @@ services:
     networks:
       - diri-persola-dev-network
 
-
-
   persola-ui:
     build:
-      context: ./diri-persola/ui
+      context: ./ui
       dockerfile: Dockerfile
     image: diri-persola-dev-ui:latest
     pull_policy: never

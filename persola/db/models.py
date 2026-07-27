@@ -230,6 +230,8 @@ class AgentModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	def to_config(self) -> "AgentConfig":
 		from ..models import AgentConfig
 
+		# Prefer JSON tools column; avoid lazy-loading tool_configs (async-safe).
+		tools = list(self.tools or [])
 		return AgentConfig(
 			agent_id=str(self.id),
 			name=self.name,
@@ -239,7 +241,7 @@ class AgentModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 			max_tokens=self.max_tokens or 2000,
 			system_prompt=self.system_prompt or "",
 			persona_id=str(self.persona_id) if self.persona_id else None,
-			tools=[tool.name for tool in self.tool_configs] or list(self.tools),
+			tools=tools,
 			memory_enabled=self.memory_enabled,
 			session_id=None,
 		)
@@ -510,3 +512,255 @@ class TeamMemoryModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	source_role: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
 	team_session: Mapped["TeamSessionModel"] = relationship(back_populates="memory_entries")
+
+
+# ── Communal City (Phase 1) ─────────────────────────────────────────────────
+
+
+class FamilyMemberRole(str, Enum):
+	PARENT = "parent"
+	CHILD = "child"
+
+
+class FamilyMemberLifeStatus(str, Enum):
+	ALIVE = "alive"
+	DECEASED = "deceased"
+
+
+class CityDistrict(str, Enum):
+	BUILD = "build"
+	VIZ = "viz"
+	RESEARCH = "research"
+	OPS = "ops"
+
+
+class CityJobStatus(str, Enum):
+	PENDING = "pending"
+	PLANNED = "planned"
+	RUNNING = "running"
+	COMPLETED = "completed"
+	FAILED = "failed"
+
+
+class WorkspaceRunStatus(str, Enum):
+	PENDING = "pending"
+	RUNNING = "running"
+	SUCCEEDED = "succeeded"
+	FAILED = "failed"
+	TIMEOUT = "timeout"
+	DENIED = "denied"
+
+
+class FamilyModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+	__tablename__ = "families"
+	__table_args__ = (
+		Index("idx_families_name", "name"),
+		_enum_constraint("default_district", tuple(d.value for d in CityDistrict), name="ck_families_default_district"),
+	)
+
+	name: Mapped[str] = mapped_column(String(255), nullable=False)
+	description: Mapped[str | None] = mapped_column(Text, nullable=True)
+	default_district: Mapped[str] = mapped_column(String(30), nullable=False, default=CityDistrict.BUILD.value)
+	policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+	members: Mapped[list["FamilyMemberModel"]] = relationship(
+		back_populates="family",
+		cascade="all, delete-orphan",
+	)
+	jobs: Mapped[list["CityJobModel"]] = relationship(back_populates="family", cascade="all, delete-orphan")
+	artifacts: Mapped[list["WorkspaceArtifactModel"]] = relationship(
+		back_populates="family",
+		cascade="all, delete-orphan",
+	)
+	events: Mapped[list["CityEventModel"]] = relationship(back_populates="family", cascade="all, delete-orphan")
+
+
+class FamilyMemberModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+	__tablename__ = "family_members"
+	__table_args__ = (
+		Index("idx_family_members_family_id", "family_id"),
+		Index("idx_family_members_agent_id", "agent_id"),
+		Index("idx_family_members_life_status", "life_status"),
+		Index("idx_family_members_generation", "generation"),
+		UniqueConstraint("family_id", "agent_id", name="uq_family_member_agent"),
+		_enum_constraint("role_in_family", tuple(r.value for r in FamilyMemberRole), name="ck_family_members_role"),
+		_enum_constraint(
+			"life_status",
+			tuple(s.value for s in FamilyMemberLifeStatus),
+			name="ck_family_members_life_status",
+		),
+	)
+
+	family_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("families.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	agent_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("agents.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	parent_member_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("family_members.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	role_in_family: Mapped[str] = mapped_column(String(20), nullable=False, default=FamilyMemberRole.CHILD.value)
+	role_label: Mapped[str | None] = mapped_column(String(50), nullable=True)
+	knob_overrides: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	tool_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+	is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+	generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+	age_ticks: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+	max_age_ticks: Mapped[int] = mapped_column(Integer, nullable=False, default=6)
+	life_status: Mapped[str] = mapped_column(
+		String(20),
+		nullable=False,
+		default=FamilyMemberLifeStatus.ALIVE.value,
+	)
+	goals: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+	dreams: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+	structured_thinking: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
+	growth: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+	deceased_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+	successor_of_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("family_members.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	legacy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+	family: Mapped["FamilyModel"] = relationship(back_populates="members")
+	agent: Mapped["AgentModel"] = relationship()
+	parent_member: Mapped["FamilyMemberModel | None"] = relationship(
+		remote_side="FamilyMemberModel.id",
+		foreign_keys=[parent_member_id],
+	)
+
+
+class CityJobModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+	__tablename__ = "city_jobs"
+	__table_args__ = (
+		Index("idx_city_jobs_family_id", "family_id"),
+		Index("idx_city_jobs_status", "status"),
+		_enum_constraint("district", tuple(d.value for d in CityDistrict), name="ck_city_jobs_district"),
+		_enum_constraint("status", tuple(s.value for s in CityJobStatus), name="ck_city_jobs_status"),
+	)
+
+	family_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("families.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	goal: Mapped[str] = mapped_column(Text, nullable=False)
+	district: Mapped[str] = mapped_column(String(30), nullable=False, default=CityDistrict.BUILD.value)
+	status: Mapped[str] = mapped_column(String(30), nullable=False, default=CityJobStatus.PENDING.value)
+	result_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+	result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	team_session_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("team_sessions.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+	family: Mapped["FamilyModel"] = relationship(back_populates="jobs")
+	artifacts: Mapped[list["WorkspaceArtifactModel"]] = relationship(
+		back_populates="job",
+		cascade="all, delete-orphan",
+	)
+	runs: Mapped[list["WorkspaceRunModel"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+	events: Mapped[list["CityEventModel"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+
+
+class WorkspaceArtifactModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+	__tablename__ = "workspace_artifacts"
+	__table_args__ = (
+		Index("idx_workspace_artifacts_job_id", "job_id"),
+		Index("idx_workspace_artifacts_family_id", "family_id"),
+		Index("idx_workspace_artifacts_path", "path"),
+		UniqueConstraint("job_id", "path", "version", name="uq_workspace_artifact_path_version"),
+	)
+
+	job_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("city_jobs.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	family_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("families.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	path: Mapped[str] = mapped_column(String(512), nullable=False)
+	content: Mapped[str | None] = mapped_column(Text, nullable=True)
+	content_type: Mapped[str] = mapped_column(String(100), nullable=False, default="text/plain")
+	size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+	version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+	created_by_agent_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("agents.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	artifact_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+
+	job: Mapped["CityJobModel"] = relationship(back_populates="artifacts")
+	family: Mapped["FamilyModel"] = relationship(back_populates="artifacts")
+
+
+class WorkspaceRunModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+	__tablename__ = "workspace_runs"
+	__table_args__ = (
+		Index("idx_workspace_runs_job_id", "job_id"),
+		Index("idx_workspace_runs_status", "status"),
+		_enum_constraint("status", tuple(s.value for s in WorkspaceRunStatus), name="ck_workspace_runs_status"),
+	)
+
+	job_id: Mapped[PyUUID] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("city_jobs.id", ondelete="CASCADE"),
+		nullable=False,
+	)
+	tool: Mapped[str] = mapped_column(String(100), nullable=False)
+	args: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	status: Mapped[str] = mapped_column(String(30), nullable=False, default=WorkspaceRunStatus.PENDING.value)
+	stdout: Mapped[str | None] = mapped_column(Text, nullable=True)
+	stderr: Mapped[str | None] = mapped_column(Text, nullable=True)
+	duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+	started_by_agent_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("agents.id", ondelete="SET NULL"),
+		nullable=True,
+	)
+	artifact_refs: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+	completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+	job: Mapped["CityJobModel"] = relationship(back_populates="runs")
+
+
+class CityEventModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+	__tablename__ = "city_events"
+	__table_args__ = (
+		Index("idx_city_events_job_id", "job_id"),
+		Index("idx_city_events_family_id", "family_id"),
+		Index("idx_city_events_type", "event_type"),
+		Index("idx_city_events_created_at", "created_at"),
+	)
+
+	family_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("families.id", ondelete="CASCADE"),
+		nullable=True,
+	)
+	job_id: Mapped[PyUUID | None] = mapped_column(
+		UUID(as_uuid=True),
+		ForeignKey("city_jobs.id", ondelete="CASCADE"),
+		nullable=True,
+	)
+	event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+	payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+	family: Mapped["FamilyModel | None"] = relationship(back_populates="events")
+	job: Mapped["CityJobModel | None"] = relationship(back_populates="events")

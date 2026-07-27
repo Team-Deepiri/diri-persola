@@ -197,6 +197,8 @@ Minimal event types the city emits:
 
 UI wedge: graph (nodes = agents, edges = family) + live event feed. Austin may replace or extend the front-end; the event schema is the hand-off.
 
+**Canonical contract:** [CITY_EVENTS.md](./CITY_EVENTS.md) — poll + SSE, payload catalog, graph mapping hints.
+
 ---
 
 ## 13. Non-goals (design boundary)

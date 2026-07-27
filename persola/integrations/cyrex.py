@@ -63,6 +63,35 @@ class CyrexClient:
             response.raise_for_status()
             return response.json()
 
+    async def push_personas(
+        self,
+        personas: list[PersonaProfile],
+        *,
+        concurrency: int = 4,
+    ) -> list[dict[str, Any]]:
+        """Push many personas with bounded concurrency (city bulk sync)."""
+        import asyncio
+
+        if not personas:
+            return []
+        if not self.is_configured:
+            raise RuntimeError("Cyrex is not configured")
+
+        sem = asyncio.Semaphore(max(1, concurrency))
+        results: list[dict[str, Any]] = []
+
+        async def _one(p: PersonaProfile) -> dict[str, Any]:
+            async with sem:
+                try:
+                    payload = await self.push_persona(p)
+                    return {"persona_id": p.id, "ok": True, "response": payload}
+                except Exception as exc:  # noqa: BLE001
+                    return {"persona_id": p.id, "ok": False, "error": str(exc)}
+
+        gathered = await asyncio.gather(*[_one(p) for p in personas])
+        results.extend(gathered)
+        return results
+
     async def pull_persona(self, cyrex_id: str) -> PersonaProfile:
         if not self.is_configured:
             raise RuntimeError("Cyrex is not configured")

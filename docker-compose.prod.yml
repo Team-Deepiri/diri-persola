@@ -1,0 +1,35 @@
+# Production-oriented overlay — run from repo root:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+#
+# No --reload; multi-worker ASGI; optional auto-migrate.
+
+services:
+  persola:
+    environment:
+      DEBUG: "false"
+      PERSOLA_WORKERS: ${PERSOLA_WORKERS:-2}
+      PERSOLA_AUTO_MIGRATE: ${PERSOLA_AUTO_MIGRATE:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      CYREX_URL: ${CYREX_URL:-}
+      CYREX_API_KEY: ${CYREX_API_KEY:-}
+      PERSOLA_CITY_COMMONS_ROOT: ${PERSOLA_CITY_COMMONS_ROOT:-/var/persola/commons}
+    volumes:
+      - ./:/app
+      - persola_commons:/var/persola/commons
+    command:
+      [
+        "uvicorn",
+        "persola.api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8002",
+        "--workers",
+        "2",
+        "--proxy-headers",
+        "--forwarded-allow-ips",
+        "*",
+      ]
+
+volumes:
+  persola_commons:

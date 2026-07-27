@@ -1,0 +1,2809 @@
+"""Communal city service — families, lineage spawn, jobs, commons, events."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+from uuid import UUID
+
+import structlog
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..db.models import (
+	PERSONA_KNOB_FIELDS,
+	AgentModel,
+	CityDistrict,
+	CityEventModel,
+	CityJobModel,
+	CityJobStatus,
+	FamilyMemberLifeStatus,
+	FamilyMemberModel,
+	FamilyMemberRole,
+	FamilyModel,
+	PersonaModel,
+	WorkspaceArtifactModel,
+	WorkspaceRunModel,
+	WorkspaceRunStatus,
+)
+from ..db.repositories import AgentRepository, PersonaRepository
+from ..db.repositories.city_repository import (
+	CityEventRepository,
+	CityJobRepository,
+	FamilyMemberRepository,
+	FamilyRepository,
+	WorkspaceArtifactRepository,
+	WorkspaceRunRepository,
+)
+from ..engine import PersonaEngine
+from ..orchestration.city_life import (
+	DEFAULT_MAX_AGE_TICKS,
+	default_dreams,
+	default_goals,
+	default_structured_thinking,
+	ecosystem_cohesion,
+	inherit_legacy,
+	living_members,
+	mutate_knobs,
+)
+from ..orchestration.city_scale import DEFAULT_SCALE_CONFIG
+
+log = structlog.get_logger("persola.city_service")
+
+DEFAULT_CITY_TOOL_TAGS: list[str] = ["workspace", "run", "memory", "viz"]
+
+_TOOL_TAG_TO_NAMES: dict[str, list[str]] = {
+	"workspace": ["workspace_write", "workspace_read", "workspace_list"],
+	"run": ["run_python"],
+	"memory": ["memory_store", "memory_recall", "memory_search"],
+	"viz": ["emit_viz_event"],
+}
+
+
+def tool_names_for_tags(tags: list[str]) -> list[str]:
+	names: list[str] = []
+	seen: set[str] = set()
+	for tag in tags:
+		for name in _TOOL_TAG_TO_NAMES.get(tag, []):
+			if name not in seen:
+				seen.add(name)
+				names.append(name)
+	return names
+
+
+def _clamp_knob(value: float) -> float:
+	return max(0.0, min(1.0, float(value)))
+
+
+# Phase 8 — process-local last pulse vitals for GET /heartbeat
+LAST_CITY_HEARTBEAT: dict[str, Any] = {}
+# Phase 13 — last life-tick proof that death preserved efficiency
+LAST_LIFE_PROOF: dict[str, Any] = {}
+
+
+class CityService:
+	def __init__(self, db: AsyncSession) -> None:
+		self.db = db
+		self.families = FamilyRepository(db)
+		self.members = FamilyMemberRepository(db)
+		self.jobs = CityJobRepository(db)
+		self.artifacts = WorkspaceArtifactRepository(db)
+		self.runs = WorkspaceRunRepository(db)
+		self.events = CityEventRepository(db)
+		self.agents = AgentRepository(db)
+		self.personas = PersonaRepository(db)
+		self.engine = PersonaEngine()
+		self.model_tiers = DEFAULT_SCALE_CONFIG.model_tiers
+
+	async def emit_event(
+		self,
+		*,
+		event_type: str,
+		payload: dict[str, Any] | None = None,
+		family_id: UUID | None = None,
+		job_id: UUID | None = None,
+	) -> CityEventModel:
+		event = CityEventModel(
+			family_id=family_id,
+			job_id=job_id,
+			event_type=event_type,
+			payload=payload or {},
+		)
+		return await self.events.create(event)
+
+	def _serialize_member(self, member: FamilyMemberModel) -> dict[str, Any]:
+		from ..orchestration.city_personalities import personality_fingerprint
+
+		agent = member.agent
+		knobs = dict(member.knob_overrides or {})
+		# Prefer full persona knobs when loaded (richer viz fingerprints)
+		if agent is not None and getattr(agent, "persona", None) is not None:
+			try:
+				knobs = {**agent.persona.knob_values(), **knobs}
+			except Exception:
+				# Persona row may be partially loaded; keep member overrides only.
+				pass
+		fp = personality_fingerprint(knobs) if knobs else None
+		top = sorted(knobs.items(), key=lambda kv: abs(float(kv[1]) - 0.5), reverse=True)[:5]
+		return {
+			"id": str(member.id),
+			"family_id": str(member.family_id),
+			"agent_id": str(member.agent_id),
+			"parent_member_id": str(member.parent_member_id) if member.parent_member_id else None,
+			"role_in_family": member.role_in_family,
+			"role_label": member.role_label,
+			"knob_overrides": member.knob_overrides or {},
+			"personality": {
+				"fingerprint": fp,
+				"top_traits": [{"knob": k, "value": float(v)} for k, v in top],
+			},
+			"tool_tags": list(member.tool_tags or []),
+			"is_active": member.is_active,
+			"generation": int(getattr(member, "generation", 0) or 0),
+			"age_ticks": int(getattr(member, "age_ticks", 0) or 0),
+			"max_age_ticks": int(getattr(member, "max_age_ticks", DEFAULT_MAX_AGE_TICKS) or DEFAULT_MAX_AGE_TICKS),
+			"life_status": getattr(member, "life_status", None) or FamilyMemberLifeStatus.ALIVE.value,
+			"goals": list(getattr(member, "goals", None) or []),
+			"dreams": list(getattr(member, "dreams", None) or []),
+			"structured_thinking": float(getattr(member, "structured_thinking", 0.5) or 0.5),
+			"growth": float(getattr(member, "growth", 0.0) or 0.0),
+			"deceased_at": member.deceased_at.isoformat() if getattr(member, "deceased_at", None) else None,
+			"successor_of_id": str(member.successor_of_id) if getattr(member, "successor_of_id", None) else None,
+			"legacy": dict(getattr(member, "legacy", None) or {}),
+			"agent": {
+				"agent_id": str(agent.id),
+				"name": agent.name,
+				"role": agent.role,
+				"persona_id": str(agent.persona_id) if agent.persona_id else None,
+				"model": agent.model,
+				"tools": list(agent.tools or []),
+			}
+			if agent is not None
+			else None,
+			"created_at": member.created_at.isoformat() if member.created_at else None,
+			"updated_at": member.updated_at.isoformat() if member.updated_at else None,
+		}
+
+	def _serialize_family(self, family: FamilyModel, members: list[FamilyMemberModel] | None = None) -> dict[str, Any]:
+		member_rows = members if members is not None else list(family.members or [])
+		nodes = [self._serialize_member(m) for m in member_rows]
+		edges = [
+			{"from": str(m.parent_member_id), "to": str(m.id)}
+			for m in member_rows
+			if m.parent_member_id is not None
+		]
+		return {
+			"id": str(family.id),
+			"name": family.name,
+			"description": family.description,
+			"default_district": family.default_district,
+			"policy": family.policy or {},
+			"is_active": family.is_active,
+			"members": nodes,
+			"lineage": {"nodes": nodes, "edges": edges},
+			"created_at": family.created_at.isoformat() if family.created_at else None,
+			"updated_at": family.updated_at.isoformat() if family.updated_at else None,
+		}
+
+	def _serialize_job(self, job: CityJobModel) -> dict[str, Any]:
+		return {
+			"id": str(job.id),
+			"family_id": str(job.family_id),
+			"goal": job.goal,
+			"district": job.district,
+			"status": job.status,
+			"result_summary": job.result_summary,
+			"result": job.result or {},
+			"team_session_id": str(job.team_session_id) if job.team_session_id else None,
+			"created_at": job.created_at.isoformat() if job.created_at else None,
+			"updated_at": job.updated_at.isoformat() if job.updated_at else None,
+			"completed_at": job.completed_at.isoformat() if job.completed_at else None,
+		}
+
+	@staticmethod
+	def _serialize_artifact(row: WorkspaceArtifactModel) -> dict[str, Any]:
+		return {
+			"id": str(row.id),
+			"job_id": str(row.job_id),
+			"family_id": str(row.family_id),
+			"path": row.path,
+			"content": row.content,
+			"content_type": row.content_type,
+			"size_bytes": row.size_bytes,
+			"version": row.version,
+			"created_by_agent_id": str(row.created_by_agent_id) if row.created_by_agent_id else None,
+			"metadata": row.artifact_metadata or {},
+			"created_at": row.created_at.isoformat() if row.created_at else None,
+		}
+
+	@staticmethod
+	def _serialize_run(row: WorkspaceRunModel) -> dict[str, Any]:
+		return {
+			"id": str(row.id),
+			"job_id": str(row.job_id),
+			"tool": row.tool,
+			"args": row.args or {},
+			"status": row.status,
+			"stdout": row.stdout,
+			"stderr": row.stderr,
+			"duration_ms": row.duration_ms,
+			"started_by_agent_id": str(row.started_by_agent_id) if row.started_by_agent_id else None,
+			"artifact_refs": list(row.artifact_refs or []),
+			"created_at": row.created_at.isoformat() if row.created_at else None,
+			"completed_at": row.completed_at.isoformat() if row.completed_at else None,
+		}
+
+	@staticmethod
+	def _serialize_event(row: CityEventModel) -> dict[str, Any]:
+		return {
+			"id": str(row.id),
+			"family_id": str(row.family_id) if row.family_id else None,
+			"job_id": str(row.job_id) if row.job_id else None,
+			"event_type": row.event_type,
+			"payload": row.payload or {},
+			"created_at": row.created_at.isoformat() if row.created_at else None,
+		}
+
+	async def list_families(self, limit: int = 50) -> list[dict[str, Any]]:
+		rows = await self.families.list_recent(limit=limit)
+		return [
+			{
+				"id": str(f.id),
+				"name": f.name,
+				"description": f.description,
+				"default_district": f.default_district,
+				"is_active": f.is_active,
+				"created_at": f.created_at.isoformat() if f.created_at else None,
+				"updated_at": f.updated_at.isoformat() if f.updated_at else None,
+			}
+			for f in rows
+		]
+
+	async def get_family(self, family_id: UUID) -> dict[str, Any] | None:
+		family = await self.families.get_with_members(family_id)
+		if family is None:
+			return None
+		return self._serialize_family(family)
+
+	async def create_family(
+		self,
+		*,
+		name: str,
+		description: str | None = None,
+		default_district: str = CityDistrict.BUILD.value,
+		policy: dict[str, Any] | None = None,
+		parent_agent_id: UUID | None = None,
+		parent_name: str | None = None,
+		persona_id: UUID | None = None,
+		tool_tags: list[str] | None = None,
+		role_label: str | None = "coordinator",
+		parent_knob_overrides: dict[str, float] | None = None,
+	) -> dict[str, Any]:
+		if default_district not in {d.value for d in CityDistrict}:
+			raise ValueError(f"Invalid district: {default_district}")
+
+		tags = list(tool_tags) if tool_tags is not None else list(DEFAULT_CITY_TOOL_TAGS)
+		parent_agent: AgentModel | None = None
+		parent_overrides = {
+			k: _clamp_knob(v)
+			for k, v in (parent_knob_overrides or {}).items()
+			if k in PERSONA_KNOB_FIELDS
+		}
+
+		if parent_agent_id is not None:
+			parent_agent = await self.agents.get(parent_agent_id)
+			if parent_agent is None:
+				raise ValueError("parent_agent_id not found")
+		else:
+			resolved_persona_id = persona_id
+			if resolved_persona_id is None:
+				persona = await self.personas.create(
+					PersonaModel(
+						name=f"{name} Parent Persona",
+						description=description or f"Parent persona for family {name}",
+						**{field: parent_overrides.get(field, 0.5) for field in PERSONA_KNOB_FIELDS},
+					)
+				)
+				resolved_persona_id = persona.id
+			else:
+				persona = await self.personas.get(resolved_persona_id)
+				if persona is None:
+					raise ValueError("persona_id not found")
+				if parent_overrides:
+					for field, value in parent_overrides.items():
+						setattr(persona, field, value)
+
+			profile = persona.to_profile()
+			parent_model = self.model_tiers.for_role("parent", role_label)
+			persona.model = parent_model
+			await self.db.flush()
+			parent_agent = await self.agents.create(
+				AgentModel(
+					name=parent_name or f"{name} Parent",
+					role="assistant",
+					persona_id=resolved_persona_id,
+					model=parent_model,
+					system_prompt=self.engine.build_system_prompt(profile),
+					tools=tool_names_for_tags(tags),
+					memory_enabled=True,
+					is_active=True,
+				)
+			)
+
+		family = await self.families.create(
+			FamilyModel(
+				name=name,
+				description=description,
+				default_district=default_district,
+				policy=policy or {},
+				is_active=True,
+			)
+		)
+
+		parent_member = await self.members.create(
+			FamilyMemberModel(
+				family_id=family.id,
+				agent_id=parent_agent.id,
+				parent_member_id=None,
+				role_in_family=FamilyMemberRole.PARENT.value,
+				role_label=role_label,
+				knob_overrides=parent_overrides,
+				tool_tags=tags,
+				is_active=True,
+				generation=0,
+				age_ticks=0,
+				max_age_ticks=int((policy or {}).get("max_age_ticks", DEFAULT_MAX_AGE_TICKS)),
+				life_status=FamilyMemberLifeStatus.ALIVE.value,
+				goals=default_goals(role_label),
+				dreams=default_dreams(role_label),
+				structured_thinking=default_structured_thinking(role_label),
+				growth=0.0,
+				legacy={},
+			)
+		)
+
+		await self.emit_event(
+			event_type="family.created",
+			family_id=family.id,
+			payload={
+				"family_id": str(family.id),
+				"name": family.name,
+				"parent_member_id": str(parent_member.id),
+				"parent_agent_id": str(parent_agent.id),
+			},
+		)
+		await self.emit_event(
+			event_type="agent.spawned",
+			family_id=family.id,
+			payload={
+				"family_id": str(family.id),
+				"member_id": str(parent_member.id),
+				"agent_id": str(parent_agent.id),
+				"parent_id": None,
+				"role": FamilyMemberRole.PARENT.value,
+				"role_label": role_label,
+			},
+		)
+
+		await self.db.commit()
+		detail = await self.get_family(family.id)
+		assert detail is not None
+		return detail
+
+	async def spawn_child(
+		self,
+		family_id: UUID,
+		*,
+		name: str,
+		knob_overrides: dict[str, float] | None = None,
+		tool_tags: list[str] | None = None,
+		role_label: str | None = None,
+		parent_member_id: UUID | None = None,
+		description: str | None = None,
+	) -> dict[str, Any]:
+		family = await self.families.get_with_members(family_id)
+		if family is None:
+			raise ValueError("Family not found")
+
+		if parent_member_id is not None:
+			parent_member = next((m for m in family.members if m.id == parent_member_id), None)
+			if parent_member is None:
+				raise ValueError("parent_member_id not in family")
+		else:
+			parent_member = await self.members.get_parent(family_id)
+			if parent_member is None:
+				raise ValueError("Family has no parent member")
+
+		parent_agent = await self.agents.get(parent_member.agent_id)
+		if parent_agent is None:
+			raise ValueError("Parent agent missing")
+
+		overrides = {k: _clamp_knob(v) for k, v in (knob_overrides or {}).items() if k in PERSONA_KNOB_FIELDS}
+		inherited_tags = list(tool_tags) if tool_tags is not None else list(parent_member.tool_tags or DEFAULT_CITY_TOOL_TAGS)
+
+		base_knobs: dict[str, float] = {}
+		parent_persona: PersonaModel | None = None
+		if parent_agent.persona_id:
+			parent_persona = await self.personas.get(parent_agent.persona_id)
+			if parent_persona is not None:
+				base_knobs = parent_persona.knob_values()
+
+		merged_knobs = {**base_knobs, **overrides}
+		child_model = self.model_tiers.for_role("child", role_label)
+		child_persona = await self.personas.create(
+			PersonaModel(
+				name=f"{name} Persona",
+				description=description or f"Child of {parent_agent.name} in family {family.name}",
+				**{field: merged_knobs.get(field, 0.5) for field in PERSONA_KNOB_FIELDS},
+				model=child_model,
+				temperature=parent_persona.temperature if parent_persona else 0.7,
+				max_tokens=parent_persona.max_tokens if parent_persona else 2000,
+			)
+		)
+		profile = child_persona.to_profile()
+		child_agent = await self.agents.create(
+			AgentModel(
+				name=name,
+				role="assistant",
+				persona_id=child_persona.id,
+				model=child_model,
+				system_prompt=self.engine.build_system_prompt(profile),
+				tools=tool_names_for_tags(inherited_tags),
+				memory_enabled=True,
+				is_active=True,
+			)
+		)
+
+		child_member = await self.members.create(
+			FamilyMemberModel(
+				family_id=family.id,
+				agent_id=child_agent.id,
+				parent_member_id=parent_member.id,
+				role_in_family=FamilyMemberRole.CHILD.value,
+				role_label=role_label,
+				knob_overrides=overrides,
+				tool_tags=inherited_tags,
+				is_active=True,
+				generation=int(getattr(parent_member, "generation", 0) or 0) + 1,
+				age_ticks=0,
+				max_age_ticks=int(
+					(family.policy or {}).get("max_age_ticks", getattr(parent_member, "max_age_ticks", DEFAULT_MAX_AGE_TICKS))
+				),
+				life_status=FamilyMemberLifeStatus.ALIVE.value,
+				goals=default_goals(role_label),
+				dreams=default_dreams(role_label),
+				structured_thinking=default_structured_thinking(role_label),
+				growth=0.0,
+				legacy={},
+			)
+		)
+
+		await self.emit_event(
+			event_type="agent.spawned",
+			family_id=family.id,
+			payload={
+				"family_id": str(family.id),
+				"member_id": str(child_member.id),
+				"agent_id": str(child_agent.id),
+				"parent_id": str(parent_member.id),
+				"parent_agent_id": str(parent_agent.id),
+				"role": FamilyMemberRole.CHILD.value,
+				"role_label": role_label,
+				"knob_overrides": overrides,
+				"tool_tags": inherited_tags,
+			},
+		)
+
+		await self.db.commit()
+		members = await self.members.list_for_family(family_id)
+		child = next((m for m in members if m.id == child_member.id), None)
+		if child is None:
+			raise ValueError("Spawned child member missing after commit")
+		return self._serialize_member(child)
+
+	async def start_job(
+		self,
+		*,
+		family_id: UUID,
+		goal: str,
+		district: str | None = None,
+		team_session_id: UUID | None = None,
+		status: str = CityJobStatus.PENDING.value,
+	) -> dict[str, Any]:
+		family = await self.families.get(family_id)
+		if family is None:
+			raise ValueError("Family not found")
+
+		resolved_district = district or family.default_district
+		if resolved_district not in {d.value for d in CityDistrict}:
+			raise ValueError(f"Invalid district: {resolved_district}")
+		if status not in {s.value for s in CityJobStatus}:
+			raise ValueError(f"Invalid status: {status}")
+
+		job = await self.jobs.create(
+			CityJobModel(
+				family_id=family_id,
+				goal=goal,
+				district=resolved_district,
+				status=status,
+				result={},
+				team_session_id=team_session_id,
+			)
+		)
+
+		await self.emit_event(
+			event_type="job.started",
+			family_id=family_id,
+			job_id=job.id,
+			payload={
+				"job_id": str(job.id),
+				"family_id": str(family_id),
+				"goal": goal,
+				"district": resolved_district,
+				"status": status,
+			},
+		)
+
+		try:
+			from ..metrics import record_city_job
+
+			record_city_job(resolved_district, status)
+		except Exception as exc:
+			log.warning("city_metric_failed", what="record_city_job", error=str(exc))
+
+		await self.db.commit()
+		await self.db.refresh(job)
+		return self._serialize_job(job)
+
+	async def get_job(self, job_id: UUID) -> dict[str, Any] | None:
+		job = await self.jobs.get(job_id)
+		if job is None:
+			return None
+		payload = self._serialize_job(job)
+		payload["artifact_count"] = len(await self.artifacts.list_for_job(job_id, limit=1000))
+		payload["run_count"] = len(await self.runs.list_for_job(job_id, limit=1000))
+		payload["event_count"] = len(await self.events.list_for_job(job_id, limit=1000))
+		return payload
+
+	async def list_artifacts(self, job_id: UUID, limit: int = 200) -> list[dict[str, Any]]:
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		rows = await self.artifacts.list_for_job(job_id, limit=limit)
+		return [self._serialize_artifact(r) for r in rows]
+
+	async def get_artifact_by_path(self, job_id: UUID, path: str) -> dict[str, Any] | None:
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		row = await self.artifacts.get_latest_by_path(job_id, path)
+		if row is None:
+			return None
+		return self._serialize_artifact(row)
+
+	async def list_runs(self, job_id: UUID, limit: int = 200) -> list[dict[str, Any]]:
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		rows = await self.runs.list_for_job(job_id, limit=limit)
+		return [self._serialize_run(r) for r in rows]
+
+	async def list_events(
+		self,
+		*,
+		job_id: UUID | None = None,
+		family_id: UUID | None = None,
+		limit: int = 500,
+	) -> list[dict[str, Any]]:
+		if job_id is not None:
+			job = await self.jobs.get(job_id)
+			if job is None:
+				raise ValueError("Job not found")
+			rows = await self.events.list_for_job(job_id, limit=limit)
+		elif family_id is not None:
+			family = await self.families.get(family_id)
+			if family is None:
+				raise ValueError("Family not found")
+			rows = await self.events.list_for_family(family_id, limit=limit)
+		else:
+			raise ValueError("job_id or family_id required")
+		return [self._serialize_event(r) for r in rows]
+
+	async def list_events_since(
+		self,
+		*,
+		family_id: UUID | None = None,
+		job_id: UUID | None = None,
+		after_id: UUID | None = None,
+		since: datetime | None = None,
+		event_types: list[str] | None = None,
+		limit: int = 100,
+		city_wide: bool = False,
+	) -> list[dict[str, Any]]:
+		"""Incremental event fetch for SSE / polling (Austin live stream)."""
+		if family_id is None and job_id is None and not city_wide:
+			raise ValueError("family_id or job_id required (or city_wide=true)")
+		if family_id is not None and await self.families.get(family_id) is None:
+			raise ValueError("Family not found")
+		if job_id is not None and await self.jobs.get(job_id) is None:
+			raise ValueError("Job not found")
+		rows = await self.events.list_since(
+			family_id=family_id,
+			job_id=job_id,
+			after_id=after_id,
+			since=since,
+			event_types=event_types,
+			limit=limit,
+		)
+		return [self._serialize_event(r) for r in rows]
+
+	LIFE_EVENT_TYPES: tuple[str, ...] = (
+		"life.aged",
+		"member.died",
+		"legacy.passed",
+		"agent.spawned",
+		"family.created",
+		"city.pulse.started",
+		"city.pulse.finished",
+		"cohesion.merge",
+		"cohesion.veto",
+		"cyrex.sync.finished",
+	)
+
+	async def city_chronicle(
+		self,
+		*,
+		limit: int = 80,
+		life_only: bool = False,
+		family_id: UUID | None = None,
+	) -> dict[str, Any]:
+		"""
+		Phase 12 — era timeline for Austin / operators.
+
+		Chronological life of the city: births, aging, death, legacy, pulses.
+		"""
+		wanted = (
+			{
+				"life.aged",
+				"member.died",
+				"legacy.passed",
+				"agent.spawned",
+				"family.created",
+			}
+			if life_only
+			else None
+		)
+		fetch_n = limit * 4 if life_only else limit
+		if family_id is not None:
+			if await self.families.get(family_id) is None:
+				raise ValueError("Family not found")
+			raw = await self.events.list_for_family(family_id, limit=fetch_n)
+		else:
+			raw = await self.events.list_recent(limit=fetch_n)
+
+		if wanted is not None:
+			raw = [r for r in raw if r.event_type in wanted]
+		rows = raw[-limit:] if len(raw) > limit else raw
+		events = [self._serialize_event(r) for r in rows]
+		eco = await self.city_ecosystem(event_limit=10)
+		mem = await self.city_memorial(limit=40)
+		eras: dict[str, int] = {}
+		for e in events:
+			payload = e.get("payload") or {}
+			gen = payload.get("generation")
+			if gen is not None:
+				key = f"G{gen}"
+				eras[key] = eras.get(key, 0) + 1
+
+		return {
+			"chronicle_version": "1.0",
+			"events": events,
+			"count": len(events),
+			"eras": eras,
+			"city": eco.get("city") or {},
+			"memorial_count": mem.get("count", 0),
+			"hints": {
+				"stream_life": "GET /api/v1/city/events/stream?city_wide=true&types=member.died,legacy.passed,life.aged",
+				"memorial": "GET /api/v1/city/memorial",
+				"export": "GET /api/v1/city/export/austin",
+			},
+		}
+
+	async def city_health(self) -> dict[str, Any]:
+		"""Phase 12 — city readiness probe for compose / load balancers."""
+		from ..orchestration.city_worker import CITY_WORKER_POOL
+
+		try:
+			eco = await self.city_ecosystem(event_limit=5)
+		except Exception as exc:  # noqa: BLE001
+			return {"ok": False, "db": False, "detail": str(exc)}
+
+		city = eco.get("city") or {}
+		living = int(city.get("living") or 0)
+		return {
+			"ok": True,
+			"db": True,
+			"living": living,
+			"deceased": int(city.get("deceased") or 0),
+			"families": int(city.get("family_count") or 0),
+			"generation_max": int(city.get("generation_max") or 0),
+			"avg_efficiency": city.get("avg_efficiency"),
+			"queue_depth": getattr(CITY_WORKER_POOL, "queue_depth", 0),
+			"status": "alive" if living > 0 else "dormant",
+		}
+
+	async def generation_report(self) -> dict[str, Any]:
+		"""
+		Phase 13 — prove generational continuity.
+
+		Cohorts by generation with growth/thinking; last life-tick efficiency proof;
+		family cohesion from ecosystems.
+		"""
+		summaries = await self.list_families()
+		cohorts: dict[int, dict[str, Any]] = {}
+		legacy_edges = 0
+		goal_bank: list[str] = []
+		dream_bank: list[str] = []
+
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			for m in detail.get("members") or []:
+				gen = int(m.get("generation") or 0)
+				bucket = cohorts.setdefault(
+					gen,
+					{
+						"generation": gen,
+						"living": 0,
+						"deceased": 0,
+						"growth_sum": 0.0,
+						"thinking_sum": 0.0,
+						"members": 0,
+					},
+				)
+				bucket["members"] += 1
+				if (m.get("life_status") or "alive") == FamilyMemberLifeStatus.DECEASED.value:
+					bucket["deceased"] += 1
+				else:
+					bucket["living"] += 1
+					bucket["growth_sum"] += float(m.get("growth") or 0.0)
+					bucket["thinking_sum"] += float(m.get("structured_thinking") or 0.5)
+					for g in m.get("goals") or []:
+						if g not in goal_bank:
+							goal_bank.append(g)
+					for d in m.get("dreams") or []:
+						if d not in dream_bank:
+							dream_bank.append(d)
+				if m.get("successor_of_id"):
+					legacy_edges += 1
+
+		generations: list[dict[str, Any]] = []
+		for gen in sorted(cohorts.keys()):
+			b = cohorts[gen]
+			living = b["living"]
+			generations.append(
+				{
+					"generation": gen,
+					"living": living,
+					"deceased": b["deceased"],
+					"members": b["members"],
+					"avg_growth": round(b["growth_sum"] / living, 4) if living else 0.0,
+					"avg_structured_thinking": round(b["thinking_sum"] / living, 4) if living else 0.0,
+					# Productivity proxy: thinking × (1 + growth) among the living
+					"productivity_index": round(
+						(b["thinking_sum"] / living) * (1.0 + (b["growth_sum"] / living)) if living else 0.0,
+						4,
+					),
+				}
+			)
+
+		eco = await self.city_ecosystem(event_limit=10)
+		families = [
+			{
+				"family_id": e["family_id"],
+				"name": e["name"],
+				"district": e["district"],
+				"cohesion": e["cohesion"],
+				"efficiency": e["efficiency"],
+				"living": e["living"],
+				"deceased": e["deceased"],
+				"generation_max": e["generation_max"],
+				"goals": e.get("goals") or [],
+				"dreams": e.get("dreams") or [],
+			}
+			for e in eco.get("ecosystems") or []
+		]
+
+		# Continuity: later generations should not collapse productivity_index vs founders
+		prod = [g["productivity_index"] for g in generations if g["living"] > 0]
+		continuity_ok = True
+		if len(prod) >= 2 and prod[0] > 0:
+			continuity_ok = prod[-1] >= prod[0] * 0.85
+
+		return {
+			"generations": generations,
+			"legacy_edges": legacy_edges,
+			"goal_bank": goal_bank[:24],
+			"dream_bank": dream_bank[:16],
+			"families": families,
+			"city": eco.get("city") or {},
+			"last_life_proof": dict(LAST_LIFE_PROOF) if LAST_LIFE_PROOF else None,
+			"continuity_ok": continuity_ok,
+			"thesis": (
+				"Death is natural; efficiency and productivity pass through generations "
+				"via inherited goals, dreams, tools, and personality drift."
+			),
+		}
+
+	async def update_family_policy(self, family_id: UUID, policy_patch: dict[str, Any]) -> dict[str, Any]:
+		"""Merge policy keys (max_age_ticks, cohesion_min, …)."""
+		family = await self.families.get(family_id)
+		if family is None:
+			raise ValueError("Family not found")
+		merged = dict(family.policy or {})
+		allowed = {"max_age_ticks", "cohesion_min", "district_bias", "notes"}
+		for k, v in policy_patch.items():
+			if k not in allowed:
+				continue
+			if k == "max_age_ticks":
+				merged[k] = max(1, min(200, int(v)))
+			elif k == "cohesion_min":
+				merged[k] = max(0.0, min(1.0, float(v)))
+			else:
+				merged[k] = v
+		family.policy = merged
+		# Apply max_age to living members when set
+		if "max_age_ticks" in merged:
+			members = await self.members.list_for_family(family_id)
+			for m in members:
+				if m.life_status == FamilyMemberLifeStatus.ALIVE.value:
+					m.max_age_ticks = int(merged["max_age_ticks"])
+		await self.db.commit()
+		detail = await self.get_family(family_id)
+		assert detail is not None
+		return detail
+
+	async def update_member_life(
+		self,
+		member_id: UUID,
+		*,
+		goals: list[str] | None = None,
+		dreams: list[str] | None = None,
+		structured_thinking: float | None = None,
+	) -> dict[str, Any]:
+		member = await self.members.get(member_id)
+		if member is None:
+			raise ValueError("Member not found")
+		if goals is not None:
+			member.goals = [str(g)[:200] for g in goals][:12]
+		if dreams is not None:
+			member.dreams = [str(d)[:200] for d in dreams][:8]
+		if structured_thinking is not None:
+			member.structured_thinking = max(0.0, min(1.0, float(structured_thinking)))
+		await self.db.commit()
+		# Reload with agent
+		family = await self.families.get_with_members(member.family_id)
+		if family is None:
+			raise ValueError("Family not found")
+		row = next((m for m in family.members if m.id == member_id), None)
+		if row is None:
+			raise ValueError("Member missing after update")
+		return self._serialize_member(row)
+
+	# ── Commons helpers for Phase 2 (usable now for persistence tests) ──
+
+	async def record_artifact(
+		self,
+		*,
+		job_id: UUID,
+		path: str,
+		content: str | None,
+		created_by_agent_id: UUID | None = None,
+		content_type: str = "text/plain",
+		metadata: dict[str, Any] | None = None,
+		commit: bool = True,
+	) -> dict[str, Any]:
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+
+		version = (await self.artifacts.latest_version(job_id, path)) + 1
+		body = content or ""
+		row = await self.artifacts.create(
+			WorkspaceArtifactModel(
+				job_id=job_id,
+				family_id=job.family_id,
+				path=path,
+				content=content,
+				content_type=content_type,
+				size_bytes=len(body.encode("utf-8")),
+				version=version,
+				created_by_agent_id=created_by_agent_id,
+				artifact_metadata=metadata or {},
+			)
+		)
+		await self.emit_event(
+			event_type="artifact.written",
+			family_id=job.family_id,
+			job_id=job_id,
+			payload={
+				"artifact_id": str(row.id),
+				"path": path,
+				"version": version,
+				"size_bytes": row.size_bytes,
+				"agent_id": str(created_by_agent_id) if created_by_agent_id else None,
+				"job_id": str(job_id),
+			},
+		)
+		# Phase 9 — optional disk commons mirror
+		mirror_info: dict[str, Any] = {"mirrored": False}
+		try:
+			from ..orchestration.commons_mirror import mirror_artifact
+
+			mirror_info = mirror_artifact(job_id=job_id, path=path, content=content)
+		except Exception as exc:  # noqa: BLE001 — mirror must not break writes
+			mirror_info = {"mirrored": False, "error": str(exc)}
+
+		if commit:
+			await self.db.commit()
+			await self.db.refresh(row)
+		payload = self._serialize_artifact(row)
+		payload["disk_mirror"] = mirror_info
+		return payload
+
+	async def record_run(
+		self,
+		*,
+		job_id: UUID,
+		tool: str,
+		args: dict[str, Any] | None = None,
+		status: str = WorkspaceRunStatus.PENDING.value,
+		stdout: str | None = None,
+		stderr: str | None = None,
+		duration_ms: int | None = None,
+		started_by_agent_id: UUID | None = None,
+		artifact_refs: list[Any] | None = None,
+		commit: bool = True,
+	) -> dict[str, Any]:
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		if status not in {s.value for s in WorkspaceRunStatus}:
+			raise ValueError(f"Invalid run status: {status}")
+
+		row = await self.runs.create(
+			WorkspaceRunModel(
+				job_id=job_id,
+				tool=tool,
+				args=args or {},
+				status=status,
+				stdout=stdout,
+				stderr=stderr,
+				duration_ms=duration_ms,
+				started_by_agent_id=started_by_agent_id,
+				artifact_refs=artifact_refs or [],
+			)
+		)
+		await self.emit_event(
+			event_type="run.finished" if status != WorkspaceRunStatus.PENDING.value else "run.started",
+			family_id=job.family_id,
+			job_id=job_id,
+			payload={
+				"run_id": str(row.id),
+				"tool": tool,
+				"status": status,
+				"duration_ms": duration_ms,
+				"agent_id": str(started_by_agent_id) if started_by_agent_id else None,
+				"job_id": str(job_id),
+			},
+		)
+		if commit:
+			await self.db.commit()
+			await self.db.refresh(row)
+		try:
+			from ..metrics import record_city_tool_run
+
+			record_city_tool_run(tool, status)
+		except Exception as exc:
+			log.warning("city_metric_failed", what="record_city_tool_run", error=str(exc))
+		return self._serialize_run(row)
+
+	async def set_job_status(
+		self,
+		job_id: UUID,
+		*,
+		status: str,
+		result_summary: str | None = None,
+		result: dict[str, Any] | None = None,
+	) -> dict[str, Any]:
+		from datetime import datetime
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		if status not in {s.value for s in CityJobStatus}:
+			raise ValueError(f"Invalid status: {status}")
+		job.status = status
+		if result_summary is not None:
+			job.result_summary = result_summary
+		if result is not None:
+			job.result = result
+		if status in {CityJobStatus.COMPLETED.value, CityJobStatus.FAILED.value}:
+			job.completed_at = datetime.utcnow()
+			await self.emit_event(
+				event_type="job.completed",
+				family_id=job.family_id,
+				job_id=job.id,
+				payload={
+					"job_id": str(job.id),
+					"family_id": str(job.family_id),
+					"status": status,
+					"result_summary": result_summary,
+				},
+			)
+		await self.db.commit()
+		await self.db.refresh(job)
+		try:
+			from ..metrics import record_city_job, set_city_cohesion_score
+
+			record_city_job(job.district, status)
+			if status == CityJobStatus.COMPLETED.value:
+				score = await self.cohesion_score(job.id)
+				set_city_cohesion_score(score["score"])
+		except Exception as exc:
+			log.warning("city_metric_failed", what="record_city_job_cohesion", error=str(exc))
+		return self._serialize_job(job)
+
+	async def execute_tool_calls(
+		self,
+		job_id: UUID,
+		calls: list[dict[str, Any]],
+		*,
+		agent_id: UUID | None = None,
+		session_id: str | None = None,
+		governed: bool = True,
+	) -> dict[str, Any]:
+		"""Run structured tool calls against the city commons registry."""
+		from ..orchestration.city_scale import GLOBAL_GOVERNOR
+		from ..orchestration.city_tools import build_city_registry
+		from ..orchestration.tool_calls import parse_tool_calls
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+
+		if job.status == CityJobStatus.PENDING.value:
+			job.status = CityJobStatus.RUNNING.value
+			await self.db.flush()
+
+		acquired = False
+		if governed:
+			await GLOBAL_GOVERNOR.acquire(
+				family_id=str(job.family_id),
+				district=job.district,
+				job_id=str(job.id),
+			)
+			acquired = True
+
+		try:
+			registry = await build_city_registry(
+				session_id or f"city-job-{job_id}",
+				db=self.db,
+				job_id=job_id,
+				agent_id=agent_id,
+			)
+
+			normalized: list[dict[str, Any]] = []
+			for call in calls:
+				if isinstance(call, str):
+					normalized.extend(parse_tool_calls(call))
+				elif isinstance(call, dict):
+					name = call.get("name")
+					if not name:
+						continue
+					args = call.get("args") or call.get("arguments") or {}
+					normalized.append({"name": str(name), "args": args if isinstance(args, dict) else {}})
+
+			results: list[dict[str, Any]] = []
+			for call in normalized:
+				name = call["name"]
+				args = call.get("args") or {}
+				try:
+					result = await registry.run(name, **args)
+					ok = bool(result.get("ok")) if "ok" in result else not bool(result.get("error"))
+					results.append({"name": name, "args": args, "result": result, "ok": ok})
+				except Exception as exc:  # noqa: BLE001 — surface tool failures to caller
+					results.append({"name": name, "args": args, "error": str(exc), "ok": False})
+
+			await self.db.commit()
+			fresh = await self.jobs.get(job_id)
+			return {
+				"job_id": str(job_id),
+				"status": fresh.status if fresh else job.status,
+				"tool_results": results,
+			}
+		finally:
+			if acquired:
+				GLOBAL_GOVERNOR.release(
+					family_id=str(job.family_id),
+					district=job.district,
+					job_id=str(job.id),
+				)
+
+	# ── Phase 3 wedge demo ───────────────────────────────────────────────
+
+	WEDGE_CHILDREN: tuple[dict[str, Any], ...] = (
+		{
+			"name": "Nova Analyst",
+			"role_label": "analyst",
+			"knob_overrides": {"reasoning_depth": 0.95, "accuracy": 0.95, "creativity": 0.35},
+		},
+		{
+			"name": "Lux Creative",
+			"role_label": "creative",
+			"knob_overrides": {"creativity": 0.95, "humor": 0.7, "openness": 0.9},
+		},
+		{
+			"name": "Forge Executor",
+			"role_label": "executor",
+			"knob_overrides": {"conscientiousness": 0.9, "step_by_step": 0.9, "reliability": 0.95},
+		},
+		{
+			"name": "Kai Empath",
+			"role_label": "empath",
+			"knob_overrides": {"empathy": 0.95, "agreeableness": 0.9, "verbosity": 0.55},
+		},
+		{
+			"name": "Atlas Builder",
+			"role_label": "builder",
+			"knob_overrides": {"patterns": 0.85, "synthetics": 0.8, "accuracy": 0.85},
+		},
+	)
+
+	async def seed_wedge_family(self, *, name: str = "Wedge City Family") -> dict[str, Any]:
+		"""Create a parent + 5 distinct children for the Phase 3 demo."""
+		family = await self.create_family(
+			name=name,
+			description="Phase 3 wedge demo family — shared commons, build and run.",
+			default_district=CityDistrict.BUILD.value,
+			parent_name="Orion Coordinator",
+			role_label="coordinator",
+			tool_tags=list(DEFAULT_CITY_TOOL_TAGS),
+			policy={"wedge": True, "max_children": 8},
+		)
+		family_id = UUID(family["id"])
+		for child in self.WEDGE_CHILDREN:
+			await self.spawn_child(
+				family_id,
+				name=str(child["name"]),
+				role_label=str(child["role_label"]),
+				knob_overrides=dict(child.get("knob_overrides") or {}),
+				tool_tags=list(DEFAULT_CITY_TOOL_TAGS),
+			)
+		detail = await self.get_family(family_id)
+		assert detail is not None
+		return detail
+
+	async def run_wedge_demo(
+		self,
+		*,
+		family_id: UUID | None = None,
+		goal: str | None = None,
+		family_name: str = "Wedge City Family",
+	) -> dict[str, Any]:
+		"""
+		Seed (if needed), start a build+run job, and have multiple children contribute.
+
+		Executor writes + runs Python; analyst/creative/empath/builder write commons notes.
+		"""
+		if family_id is not None:
+			family = await self.get_family(family_id)
+			if family is None:
+				raise ValueError("Family not found")
+		else:
+			family = await self.seed_wedge_family(name=family_name)
+
+		fid = UUID(family["id"])
+		members = family.get("members") or []
+		by_role: dict[str, dict[str, Any]] = {}
+		for m in members:
+			label = m.get("role_label") or m.get("role_in_family")
+			if label and label not in by_role:
+				by_role[str(label)] = m
+
+		job_goal = goal or "Build hello.py in the commons and run it; siblings leave notes."
+		job = await self.start_job(family_id=fid, goal=job_goal, district=CityDistrict.BUILD.value)
+		job_id = UUID(job["id"])
+
+		contributions: list[dict[str, Any]] = []
+
+		async def _as(role: str, calls: list[dict[str, Any]]) -> None:
+			member = by_role.get(role)
+			agent_id = UUID(member["agent_id"]) if member and member.get("agent_id") else None
+			result = await self.execute_tool_calls(job_id, calls, agent_id=agent_id)
+			contributions.append({"role": role, "agent_id": str(agent_id) if agent_id else None, **result})
+
+		await _as(
+			"analyst",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "notes/analysis.md",
+						"content": "# Analysis\nGoal is clear: ship a runnable hello artifact.\nSuccess = stdout contains wedge marker.\n",
+					},
+				}
+			],
+		)
+		await _as(
+			"creative",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "notes/spark.md",
+						"content": "# Spark\nMake the script greet the city by name.\n",
+					},
+				},
+				{
+					"name": "emit_viz_event",
+					"args": {"event_type": "viz.pulse", "payload": {"from": "creative", "mood": "excited"}},
+				},
+			],
+		)
+		await _as(
+			"empath",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "notes/users.md",
+						"content": "# Users\nOperators need to see who built and who ran.\n",
+					},
+				}
+			],
+		)
+		await _as(
+			"builder",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "notes/build.md",
+						"content": "# Build plan\n1. Write hello.py\n2. run_python\n3. Confirm stdout\n",
+					},
+				}
+			],
+		)
+		await _as(
+			"executor",
+			[
+				{
+					"name": "workspace_write",
+					"args": {
+						"path": "hello.py",
+						"content": (
+							'print("persola-city-wedge")\n'
+							'print("sum", 1 + 2 + 3)\n'
+						),
+					},
+				},
+				{"name": "run_python", "args": {"path": "hello.py"}},
+			],
+		)
+
+		# Cohesion merge event from parent/coordinator
+		parent = by_role.get("coordinator") or next(
+			(m for m in members if m.get("role_in_family") == "parent"),
+			None,
+		)
+		parent_agent = UUID(parent["agent_id"]) if parent and parent.get("agent_id") else None
+		child_ids = [
+			m["agent_id"]
+			for m in members
+			if m.get("role_in_family") == "child" and m.get("agent_id")
+		]
+		await self.execute_tool_calls(
+			job_id,
+			[
+				{
+					"name": "emit_viz_event",
+					"args": {
+						"event_type": "cohesion.merge",
+						"payload": {
+							"summary": "Wedge demo: siblings contributed notes; executor built and ran hello.py",
+							"roles": list(by_role.keys()),
+							"parent_id": parent.get("id") if parent else None,
+							"parent_agent_id": str(parent_agent) if parent_agent else None,
+							"child_ids": child_ids,
+						},
+					},
+				}
+			],
+			agent_id=parent_agent,
+		)
+
+		runs = await self.list_runs(job_id)
+		arts = await self.list_artifacts(job_id)
+		succeeded = any(r.get("status") == "succeeded" and r.get("tool") == "run_python" for r in runs)
+		await self.set_job_status(
+			job_id,
+			status=CityJobStatus.COMPLETED.value if succeeded else CityJobStatus.FAILED.value,
+			result_summary="wedge demo completed" if succeeded else "wedge demo failed run_python",
+			result={
+				"artifact_count": len(arts),
+				"run_count": len(runs),
+				"contributions": len(contributions),
+			},
+		)
+
+		detail = await self.get_job(job_id)
+		return {
+			"family": await self.get_family(fid),
+			"job": detail,
+			"artifacts": arts,
+			"runs": runs,
+			"events": await self.list_events(job_id=job_id),
+			"contributions": contributions,
+			"success": succeeded,
+		}
+
+	# ── Phase 5 scale ────────────────────────────────────────────────────
+
+	async def cohesion_score(self, job_id: UUID) -> dict[str, Any]:
+		"""
+		Cohesion ∈ [0,1]: fraction of family members who authored an artifact
+		or started a run on this job, blended with tool success rate.
+		"""
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		members = await self.members.list_for_family(job.family_id)
+		member_agents = {str(m.agent_id) for m in members}
+		arts = await self.artifacts.list_for_job(job_id, limit=1000)
+		runs = await self.runs.list_for_job(job_id, limit=1000)
+		authors = {
+			str(a.created_by_agent_id)
+			for a in arts
+			if a.created_by_agent_id and str(a.created_by_agent_id) in member_agents
+		}
+		runners = {
+			str(r.started_by_agent_id)
+			for r in runs
+			if r.started_by_agent_id and str(r.started_by_agent_id) in member_agents
+		}
+		participants = authors | runners
+		participation = (len(participants) / len(member_agents)) if member_agents else 0.0
+		succeeded = sum(1 for r in runs if r.status == WorkspaceRunStatus.SUCCEEDED.value)
+		success_rate = (succeeded / len(runs)) if runs else 0.0
+		score = round(0.6 * participation + 0.4 * success_rate, 4)
+		return {
+			"job_id": str(job_id),
+			"score": score,
+			"participation": round(participation, 4),
+			"tool_success_rate": round(success_rate, 4),
+			"participants": len(participants),
+			"family_size": len(member_agents),
+			"artifact_count": len(arts),
+			"run_count": len(runs),
+		}
+
+	def _cohesion_threshold(self, family: dict[str, Any] | FamilyModel) -> float:
+		policy = family.policy if isinstance(family, FamilyModel) else (family.get("policy") or {})
+		raw = policy.get("cohesion_min", 0.35) if isinstance(policy, dict) else 0.35
+		try:
+			return max(0.0, min(1.0, float(raw)))
+		except (TypeError, ValueError):
+			return 0.35
+
+	async def cohesion_decide(
+		self,
+		job_id: UUID,
+		*,
+		action: str,
+		reason: str | None = None,
+		force: bool = False,
+	) -> dict[str, Any]:
+		"""
+		Parent cohesion gate (Phase 7).
+
+		``merge`` — approve job when score ≥ family cohesion_min (or force).
+		``veto`` — reject job and emit cohesion.veto.
+		"""
+		action_l = (action or "").lower().strip()
+		if action_l not in {"merge", "veto"}:
+			raise ValueError("action must be merge or veto")
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		family = await self.get_family(job.family_id)
+		if family is None:
+			raise ValueError("Family not found")
+
+		score = await self.cohesion_score(job_id)
+		threshold = self._cohesion_threshold(family)
+		parent = next((m for m in family["members"] if m.get("role_in_family") == "parent"), None)
+		parent_agent = UUID(parent["agent_id"]) if parent and parent.get("agent_id") else None
+		child_ids = [
+			m["agent_id"]
+			for m in family["members"]
+			if m.get("role_in_family") == "child" and m.get("agent_id")
+		]
+
+		if action_l == "merge":
+			if not force and score["score"] < threshold:
+				raise ValueError(
+					f"Cohesion {score['score']} below threshold {threshold}; veto or force=true"
+				)
+			await self.execute_tool_calls(
+				job_id,
+				[
+					{
+						"name": "emit_viz_event",
+						"args": {
+							"event_type": "cohesion.merge",
+							"payload": {
+								"summary": reason or "Parent approved communal merge",
+								"score": score["score"],
+								"threshold": threshold,
+								"parent_id": parent.get("id") if parent else None,
+								"parent_agent_id": str(parent_agent) if parent_agent else None,
+								"child_ids": child_ids,
+							},
+						},
+					}
+				],
+				agent_id=parent_agent,
+			)
+			await self.set_job_status(
+				job_id,
+				status=CityJobStatus.COMPLETED.value,
+				result_summary=reason or "cohesion merge approved",
+				result={"cohesion": score, "decision": "merge", "threshold": threshold},
+			)
+			decision = "merge"
+		else:
+			await self.emit_event(
+				event_type="cohesion.veto",
+				family_id=job.family_id,
+				job_id=job_id,
+				payload={
+					"summary": reason or "Parent vetoed cohesion merge",
+					"score": score["score"],
+					"threshold": threshold,
+					"parent_id": parent.get("id") if parent else None,
+					"parent_agent_id": str(parent_agent) if parent_agent else None,
+					"child_ids": child_ids,
+				},
+			)
+			await self.set_job_status(
+				job_id,
+				status=CityJobStatus.FAILED.value,
+				result_summary=reason or "cohesion veto",
+				result={"cohesion": score, "decision": "veto", "threshold": threshold},
+			)
+			decision = "veto"
+
+		return {
+			"job_id": str(job_id),
+			"decision": decision,
+			"cohesion": score,
+			"threshold": threshold,
+			"job": await self.get_job(job_id),
+		}
+
+	async def city_pulse(
+		self,
+		*,
+		max_families: int | None = None,
+		districts: list[str] | None = None,
+		auto_merge: bool = True,
+		name_prefix: str = "pulse",
+		multi_contributor: bool = True,
+	) -> dict[str, Any]:
+		"""
+		Phase 7/8 — run a district-aware job across active families.
+
+		Each family works its district commons with personality-matched agents
+		(Phase 8: multiple siblings contribute), then optionally auto-merges
+		when cohesion clears the family threshold.
+		"""
+		from ..orchestration.city_pulse import (
+			district_tool_calls,
+			multi_contributor_plan,
+			parse_agent_uuid,
+			pick_agent_for_district,
+		)
+
+		summaries = await self.list_families()
+		if max_families is not None:
+			summaries = summaries[: max(1, max_families)]
+		allowed = {d.lower() for d in districts} if districts else None
+
+		results: list[dict[str, Any]] = []
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			district = (detail.get("default_district") or "build").lower()
+			if allowed is not None and district not in allowed:
+				continue
+
+			fid = UUID(detail["id"])
+			slug = f"{name_prefix}-{detail['name']}"
+			lead = pick_agent_for_district(detail["members"], district)
+			lead_id = parse_agent_uuid(lead.get("agent_id") if lead else None)
+
+			job = await self.start_job(
+				family_id=fid,
+				goal=f"City pulse · {district} · {detail['name']}",
+				district=district,
+			)
+			job_id = UUID(job["id"])
+			await self.emit_event(
+				event_type="city.pulse.started",
+				family_id=fid,
+				job_id=job_id,
+				payload={
+					"family_id": str(fid),
+					"district": district,
+					"agent_id": str(lead_id) if lead_id else None,
+					"role_label": lead.get("role_label") if lead else None,
+					"multi_contributor": multi_contributor,
+				},
+			)
+
+			contributors: list[dict[str, Any]] = []
+			all_ok = True
+			if multi_contributor:
+				plan = multi_contributor_plan(
+					detail["members"],
+					district=district,
+					family_slug=slug,
+				)
+				for batch in plan:
+					aid = parse_agent_uuid(batch.get("agent_id"))
+					exec_result = await self.execute_tool_calls(
+						job_id,
+						batch["calls"],
+						agent_id=aid,
+					)
+					tool_ok = all(r.get("ok", True) for r in exec_result.get("tool_results", []))
+					all_ok = all_ok and tool_ok
+					contributors.append(
+						{
+							"agent_id": str(aid) if aid else None,
+							"role_label": batch.get("role_label"),
+							"ok": tool_ok,
+						}
+					)
+			else:
+				calls = district_tool_calls(district, family_slug=slug)
+				exec_result = await self.execute_tool_calls(job_id, calls, agent_id=lead_id)
+				all_ok = all(r.get("ok", True) for r in exec_result.get("tool_results", []))
+				contributors.append(
+					{
+						"agent_id": str(lead_id) if lead_id else None,
+						"role_label": lead.get("role_label") if lead else None,
+						"ok": all_ok,
+					}
+				)
+
+			score = await self.cohesion_score(job_id)
+
+			decision: dict[str, Any] | None = None
+			if auto_merge:
+				threshold = self._cohesion_threshold(detail)
+				if score["score"] >= threshold:
+					decision = await self.cohesion_decide(
+						job_id,
+						action="merge",
+						reason=f"Auto-merge after {district} pulse ({len(contributors)} contributors)",
+					)
+				else:
+					decision = await self.cohesion_decide(
+						job_id,
+						action="veto",
+						reason=f"Auto-veto: cohesion {score['score']} < {threshold}",
+					)
+			else:
+				await self.set_job_status(
+					job_id,
+					status=CityJobStatus.COMPLETED.value,
+					result_summary="pulse finished (manual cohesion)",
+					result={"cohesion": score, "contributors": contributors},
+				)
+
+			await self.emit_event(
+				event_type="city.pulse.finished",
+				family_id=fid,
+				job_id=job_id,
+				payload={
+					"family_id": str(fid),
+					"district": district,
+					"cohesion": score["score"],
+					"decision": (decision or {}).get("decision") if decision else None,
+					"agent_id": str(lead_id) if lead_id else None,
+					"contributors": len(contributors),
+				},
+			)
+
+			results.append(
+				{
+					"family_id": str(fid),
+					"family_name": detail["name"],
+					"district": district,
+					"job_id": str(job_id),
+					"agent_id": str(lead_id) if lead_id else None,
+					"role_label": lead.get("role_label") if lead else None,
+					"contributors": contributors,
+					"contributor_count": len(contributors),
+					"cohesion": score,
+					"decision": (decision or {}).get("decision") if decision else None,
+					"ok": all_ok,
+				}
+			)
+
+		merged = sum(1 for r in results if r.get("decision") == "merge")
+		vetoed = sum(1 for r in results if r.get("decision") == "veto")
+		by_district: dict[str, int] = {}
+		for r in results:
+			by_district[r["district"]] = by_district.get(r["district"], 0) + 1
+
+		avg_cohesion = (
+			round(sum(r["cohesion"]["score"] for r in results) / len(results), 4) if results else 0.0
+		)
+		avg_contributors = (
+			round(sum(r["contributor_count"] for r in results) / len(results), 2) if results else 0.0
+		)
+
+		# Heartbeat memory for living-city UI
+		LAST_CITY_HEARTBEAT.clear()
+		LAST_CITY_HEARTBEAT.update(
+			{
+				"pulsed": len(results),
+				"merged": merged,
+				"vetoed": vetoed,
+				"avg_cohesion": avg_cohesion,
+				"avg_contributors": avg_contributors,
+				"districts": by_district,
+				"at": datetime.utcnow().isoformat(),
+			}
+		)
+
+		return {
+			"pulsed": len(results),
+			"merged": merged,
+			"vetoed": vetoed,
+			"districts": by_district,
+			"results": results,
+			"avg_cohesion": avg_cohesion,
+			"avg_contributors": avg_contributors,
+			"multi_contributor": multi_contributor,
+		}
+
+	async def _family_efficiency(self, family_id: UUID, living_count: int) -> float:
+		jobs = await self.jobs.list_for_family(family_id, limit=200)
+		completed = sum(1 for j in jobs if j.status == CityJobStatus.COMPLETED.value)
+		return round(completed / max(1, living_count), 4)
+
+	async def city_ecosystem(self, *, event_limit: int = 40) -> dict[str, Any]:
+		"""
+		Phase 7 — visualize agent ecosystems: families as cohesive units with
+		goals, dreams, age/growth, and personality-aligned cohesion.
+		"""
+		summaries = await self.list_families()
+		ecosystems: list[dict[str, Any]] = []
+		living_total = 0
+		deceased_total = 0
+		gen_max = 0
+		efficiencies: list[float] = []
+
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			members = detail.get("members") or []
+			alive = living_members(members)
+			dead = [m for m in members if (m.get("life_status") or "") == FamilyMemberLifeStatus.DECEASED.value]
+			living_total += len(alive)
+			deceased_total += len(dead)
+			gmax = max((int(m.get("generation") or 0) for m in members), default=0)
+			gen_max = max(gen_max, gmax)
+			cohesion = ecosystem_cohesion(members)
+			eff = await self._family_efficiency(UUID(detail["id"]), len(alive))
+			efficiencies.append(eff)
+			goals: list[str] = []
+			dreams: list[str] = []
+			for m in alive:
+				for g in m.get("goals") or []:
+					if g not in goals:
+						goals.append(g)
+				for d in m.get("dreams") or []:
+					if d not in dreams:
+						dreams.append(d)
+			ecosystems.append(
+				{
+					"family_id": detail["id"],
+					"name": detail["name"],
+					"district": detail.get("default_district"),
+					"cohesion": cohesion,
+					"efficiency": eff,
+					"living": len(alive),
+					"deceased": len(dead),
+					"generation_max": gmax,
+					"goals": goals[:12],
+					"dreams": dreams[:8],
+					"members": members,
+				}
+			)
+
+		snap = await self.city_snapshot(event_limit=event_limit)
+		avg_eff = round(sum(efficiencies) / max(1, len(efficiencies)), 4) if efficiencies else 0.0
+		city = {
+			"living": living_total,
+			"deceased": deceased_total,
+			"family_count": len(ecosystems),
+			"generation_max": gen_max,
+			"avg_efficiency": avg_eff,
+			"distinct_personalities": snap.get("distinct_personalities"),
+		}
+		try:
+			from ..metrics import set_city_life_vitals
+
+			set_city_life_vitals(
+				living=living_total,
+				deceased=deceased_total,
+				generation_max=gen_max,
+				efficiency=avg_eff,
+			)
+		except Exception as exc:
+			log.warning("city_metric_failed", what="set_city_life_vitals", error=str(exc))
+		return {
+			"ecosystems": ecosystems,
+			"city": city,
+			"events": snap.get("events") or [],
+		}
+
+	async def _succeed_member(self, deceased: FamilyMemberModel, family: FamilyModel) -> FamilyMemberModel:
+		"""Spawn next generation inheriting knobs, tools, goals, dreams — death without efficiency loss."""
+		ser = self._serialize_member(deceased)
+		legacy = inherit_legacy(ser)
+		next_gen = int(deceased.generation or 0) + 1
+		role_label = deceased.role_label or "builder"
+		agent_row = deceased.agent
+		if agent_row is None:
+			agent_row = await self.agents.get(deceased.agent_id)
+		base_name = agent_row.name if agent_row else "Heir"
+		# Strip prior generation suffixes
+		base = base_name.split(" · G")[0].rstrip()
+		heir_name = f"{base} · G{next_gen}"
+
+		parent_for_lineage = deceased
+		# Attach heir under a living parent when possible
+		living_parent = await self.members.get_parent(family.id)
+		if living_parent is not None and living_parent.life_status == FamilyMemberLifeStatus.ALIVE.value:
+			parent_for_lineage = living_parent
+
+		knobs = mutate_knobs(dict(deceased.knob_overrides or {}), generation=next_gen)
+		# Merge persona knobs when available
+		persona_id = agent_row.persona_id if agent_row else None
+		if persona_id:
+			persona = await self.personas.get(persona_id)
+			if persona is not None:
+				knobs = mutate_knobs({**persona.knob_values(), **knobs}, generation=next_gen)
+
+		tags = list(deceased.tool_tags or DEFAULT_CITY_TOOL_TAGS)
+		thinking = min(
+			1.0,
+			float(deceased.structured_thinking or 0.5) * 0.85 + float(deceased.growth or 0.0) * 0.2 + 0.05,
+		)
+		goals = list(deceased.goals or default_goals(role_label))
+		dreams = list(deceased.dreams or default_dreams(role_label))
+		# Carry one ancestral dream marker
+		dreams = list(dict.fromkeys([*dreams, f"honor legacy of {base}"]))[:6]
+
+		was_parent = deceased.role_in_family == FamilyMemberRole.PARENT.value
+		role_in_family = FamilyMemberRole.PARENT.value if was_parent else FamilyMemberRole.CHILD.value
+
+		child_model = self.model_tiers.for_role(
+			"parent" if was_parent else "child",
+			role_label,
+		)
+		heir_persona = await self.personas.create(
+			PersonaModel(
+				name=f"{heir_name} Persona",
+				description=f"Successor of {base_name}; generation {next_gen}",
+				**{field: knobs.get(field, 0.5) for field in PERSONA_KNOB_FIELDS},
+				model=child_model,
+			)
+		)
+		profile = heir_persona.to_profile()
+		heir_agent = await self.agents.create(
+			AgentModel(
+				name=heir_name,
+				role="assistant",
+				persona_id=heir_persona.id,
+				model=child_model,
+				system_prompt=self.engine.build_system_prompt(profile),
+				tools=tool_names_for_tags(tags),
+				memory_enabled=True,
+				is_active=True,
+			)
+		)
+		heir = await self.members.create(
+			FamilyMemberModel(
+				family_id=family.id,
+				agent_id=heir_agent.id,
+				parent_member_id=None if was_parent else parent_for_lineage.id,
+				role_in_family=role_in_family,
+				role_label=role_label,
+				knob_overrides={k: knobs[k] for k in knobs if k in PERSONA_KNOB_FIELDS},
+				tool_tags=tags,
+				is_active=True,
+				generation=next_gen,
+				age_ticks=0,
+				max_age_ticks=int((family.policy or {}).get("max_age_ticks", deceased.max_age_ticks or DEFAULT_MAX_AGE_TICKS)),
+				life_status=FamilyMemberLifeStatus.ALIVE.value,
+				goals=goals,
+				dreams=dreams,
+				structured_thinking=thinking,
+				growth=min(1.0, float(deceased.growth or 0.0) * 0.5 + 0.1),
+				successor_of_id=deceased.id,
+				legacy=legacy,
+			)
+		)
+		await self.emit_event(
+			event_type="legacy.passed",
+			family_id=family.id,
+			payload={
+				"from_member_id": str(deceased.id),
+				"to_member_id": str(heir.id),
+				"generation": next_gen,
+				"role_label": role_label,
+				"goals": goals,
+				"tool_tags": tags,
+			},
+		)
+		await self.emit_event(
+			event_type="agent.spawned",
+			family_id=family.id,
+			payload={
+				"family_id": str(family.id),
+				"member_id": str(heir.id),
+				"agent_id": str(heir_agent.id),
+				"parent_id": str(heir.parent_member_id) if heir.parent_member_id else None,
+				"role": role_in_family,
+				"role_label": role_label,
+				"generation": next_gen,
+				"successor_of_id": str(deceased.id),
+			},
+		)
+		return heir
+
+	async def life_tick(
+		self,
+		*,
+		max_families: int | None = None,
+		force_age: int = 1,
+	) -> dict[str, Any]:
+		"""
+		Phase 8 — age living members; on death, pass legacy to the next generation.
+
+		Efficiency (completed jobs / living members) is measured before and after so
+		the city proves it does not lose productivity when members die.
+		"""
+		summaries = await self.list_families()
+		if max_families is not None:
+			summaries = summaries[: max(1, max_families)]
+
+		aged = 0
+		died = 0
+		born = 0
+		family_reports: list[dict[str, Any]] = []
+		eff_before: list[float] = []
+		eff_after: list[float] = []
+
+		for s in summaries:
+			family = await self.families.get_with_members(UUID(s["id"]))
+			if family is None:
+				continue
+			alive_before = [
+				m
+				for m in family.members
+				if m.is_active and (m.life_status or FamilyMemberLifeStatus.ALIVE.value) == FamilyMemberLifeStatus.ALIVE.value
+			]
+			eb = await self._family_efficiency(family.id, len(alive_before))
+			eff_before.append(eb)
+
+			deaths: list[FamilyMemberModel] = []
+			for m in list(family.members):
+				if (m.life_status or "") == FamilyMemberLifeStatus.DECEASED.value:
+					continue
+				if not m.is_active:
+					continue
+				m.age_ticks = int(m.age_ticks or 0) + max(1, force_age)
+				# Growth + structured thinking from remaining in the ecosystem
+				m.growth = min(1.0, float(m.growth or 0.0) + 0.04)
+				m.structured_thinking = min(1.0, float(m.structured_thinking or 0.5) + 0.015)
+				aged += 1
+				await self.emit_event(
+					event_type="life.aged",
+					family_id=family.id,
+					payload={
+						"member_id": str(m.id),
+						"agent_id": str(m.agent_id),
+						"age_ticks": m.age_ticks,
+						"max_age_ticks": m.max_age_ticks,
+						"generation": m.generation,
+						"growth": m.growth,
+						"structured_thinking": m.structured_thinking,
+					},
+				)
+				max_age = int(m.max_age_ticks or DEFAULT_MAX_AGE_TICKS)
+				policy_max = (family.policy or {}).get("max_age_ticks")
+				if policy_max is not None:
+					max_age = int(policy_max)
+					m.max_age_ticks = max_age
+				if m.age_ticks >= max_age:
+					deaths.append(m)
+
+			for m in deaths:
+				m.life_status = FamilyMemberLifeStatus.DECEASED.value
+				m.is_active = False
+				m.deceased_at = datetime.utcnow()
+				agent = await self.agents.get(m.agent_id)
+				if agent is not None:
+					agent.is_active = False
+				died += 1
+				await self.emit_event(
+					event_type="member.died",
+					family_id=family.id,
+					payload={
+						"member_id": str(m.id),
+						"agent_id": str(m.agent_id),
+						"generation": m.generation,
+						"role_label": m.role_label,
+						"age_ticks": m.age_ticks,
+						"goals": list(m.goals or []),
+						"dreams": list(m.dreams or []),
+					},
+				)
+				heir = await self._succeed_member(m, family)
+				born += 1
+				family_reports.append(
+					{
+						"family_id": str(family.id),
+						"deceased_member_id": str(m.id),
+						"heir_member_id": str(heir.id),
+						"generation": heir.generation,
+					}
+				)
+
+			await self.db.flush()
+			# Refresh for efficiency
+			refreshed = await self.families.get_with_members(family.id)
+			alive_after = [
+				m
+				for m in (refreshed.members if refreshed else [])
+				if m.is_active and (m.life_status or "") == FamilyMemberLifeStatus.ALIVE.value
+			]
+			ea = await self._family_efficiency(family.id, len(alive_after))
+			eff_after.append(ea)
+
+		await self.db.commit()
+		avg_b = round(sum(eff_before) / max(1, len(eff_before)), 4) if eff_before else 0.0
+		avg_a = round(sum(eff_after) / max(1, len(eff_after)), 4) if eff_after else 0.0
+		try:
+			from ..metrics import record_city_death, record_city_succession
+
+			record_city_death(died)
+			record_city_succession(born)
+		except Exception as exc:
+			log.warning("city_metric_failed", what="record_city_death_succession", error=str(exc))
+		proof = {
+			"aged": aged,
+			"died": died,
+			"born": born,
+			"successions": family_reports,
+			"efficiency_before": avg_b,
+			"efficiency_after": avg_a,
+			"efficiency_preserved": avg_a >= avg_b * 0.95 if avg_b > 0 else True,
+			"at": datetime.utcnow().isoformat(),
+		}
+		LAST_LIFE_PROOF.clear()
+		LAST_LIFE_PROOF.update(proof)
+		return {
+			**proof,
+			"ecosystem": await self.city_ecosystem(event_limit=20),
+		}
+
+	async def city_heartbeat(self) -> dict[str, Any]:
+		"""Phase 8 — last pulse snapshot + city vitals for the living UI."""
+		snap = await self.city_snapshot(event_limit=40)
+		eco = await self.city_ecosystem(event_limit=10)
+		last = dict(LAST_CITY_HEARTBEAT)
+		city = eco.get("city") or {}
+		return {
+			"alive": (city.get("living") or snap["agent_count"]) > 0,
+			"agent_count": snap["agent_count"],
+			"living": city.get("living", snap["agent_count"]),
+			"deceased": city.get("deceased", 0),
+			"family_count": snap["family_count"],
+			"distinct_personalities": snap["distinct_personalities"],
+			"generation_max": city.get("generation_max", 0),
+			"avg_efficiency": city.get("avg_efficiency", 0),
+			"progress": snap["progress"],
+			"last_pulse": last,
+			"suggested_tick": {
+				"max_families": min(8, max(1, snap["family_count"] or 1)),
+				"multi_contributor": True,
+				"auto_merge": True,
+				"life_tick": True,
+			},
+		}
+
+	async def conduct_city(
+		self,
+		*,
+		max_families: int = 4,
+		districts: list[str] | None = None,
+		task_template: str | None = None,
+		llm_fn=None,
+		use_langgraph: bool = False,
+		auto_merge: bool = True,
+	) -> dict[str, Any]:
+		"""
+		Phase 10 — City conductor.
+
+		For each selected family: open a job and either run TeamOrchestrator
+		(when ``llm_fn`` is provided) or fall back to multi-contributor pulse tools
+		so demos/tests work without a live LLM.
+		"""
+		from ..orchestration.city_pulse import multi_contributor_plan, parse_agent_uuid, pick_agent_for_district
+
+		summaries = await self.list_families()
+		summaries = summaries[: max(1, max_families)]
+		allowed = {d.lower() for d in districts} if districts else None
+		template = task_template or (
+			"As a cohesive family in the {district} district, write a short plan note "
+			"into the commons and produce one small runnable Python artifact named "
+			"conduct/{slug}.py that prints 'city-conduct-ok'. Use tools."
+		)
+
+		results: list[dict[str, Any]] = []
+		mode = "llm" if llm_fn is not None else "tools"
+
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			district = (detail.get("default_district") or "build").lower()
+			if allowed is not None and district not in allowed:
+				continue
+
+			fid = UUID(detail["id"])
+			slug = detail["name"].replace(" ", "-").lower()[:32]
+			lead = pick_agent_for_district(detail["members"], district)
+			lead_id = parse_agent_uuid(lead.get("agent_id") if lead else None)
+
+			job = await self.start_job(
+				family_id=fid,
+				goal=f"Conduct · {district} · {detail['name']}",
+				district=district,
+			)
+			job_id = UUID(job["id"])
+			await self.emit_event(
+				event_type="city.conduct.started",
+				family_id=fid,
+				job_id=job_id,
+				payload={
+					"family_id": str(fid),
+					"district": district,
+					"mode": mode,
+					"agent_id": str(lead_id) if lead_id else None,
+				},
+			)
+
+			team_payload: dict[str, Any] | None = None
+			contributors: list[dict[str, Any]] = []
+			ok = True
+
+			if llm_fn is not None:
+				task = template.format(district=district, slug=slug, family=detail["name"])
+				try:
+					team_payload = await self.invoke_team_on_job(
+						job_id,
+						task,
+						llm_fn=llm_fn,
+						agent_id=lead_id,
+						use_langgraph=use_langgraph,
+					)
+					ok = True
+				except Exception as exc:  # noqa: BLE001
+					ok = False
+					team_payload = {"error": str(exc)}
+			else:
+				plan = multi_contributor_plan(
+					detail["members"],
+					district=district,
+					family_slug=f"conduct-{slug}",
+				)
+				for batch in plan:
+					aid = parse_agent_uuid(batch.get("agent_id"))
+					exec_result = await self.execute_tool_calls(
+						job_id,
+						batch["calls"],
+						agent_id=aid,
+					)
+					tool_ok = all(r.get("ok", True) for r in exec_result.get("tool_results", []))
+					ok = ok and tool_ok
+					contributors.append(
+						{
+							"agent_id": str(aid) if aid else None,
+							"role_label": batch.get("role_label"),
+							"ok": tool_ok,
+						}
+					)
+
+			score = await self.cohesion_score(job_id)
+			decision = None
+			if auto_merge:
+				threshold = self._cohesion_threshold(detail)
+				if score["score"] >= threshold:
+					decision = await self.cohesion_decide(
+						job_id,
+						action="merge",
+						reason=f"Conduct merge ({mode})",
+						force=True if mode == "llm" else False,
+					)
+				else:
+					decision = await self.cohesion_decide(
+						job_id,
+						action="veto",
+						reason=f"Conduct veto: cohesion {score['score']} < {threshold}",
+					)
+
+			await self.emit_event(
+				event_type="city.conduct.finished",
+				family_id=fid,
+				job_id=job_id,
+				payload={
+					"family_id": str(fid),
+					"district": district,
+					"mode": mode,
+					"ok": ok,
+					"cohesion": score["score"],
+					"decision": (decision or {}).get("decision") if decision else None,
+					"agent_id": str(lead_id) if lead_id else None,
+				},
+			)
+
+			results.append(
+				{
+					"family_id": str(fid),
+					"family_name": detail["name"],
+					"district": district,
+					"job_id": str(job_id),
+					"mode": mode,
+					"ok": ok,
+					"cohesion": score,
+					"decision": (decision or {}).get("decision") if decision else None,
+					"contributors": contributors,
+					"team": team_payload,
+				}
+			)
+
+		return {
+			"mode": mode,
+			"conducted": len(results),
+			"merged": sum(1 for r in results if r.get("decision") == "merge"),
+			"vetoed": sum(1 for r in results if r.get("decision") == "veto"),
+			"results": results,
+			"avg_cohesion": round(
+				sum(r["cohesion"]["score"] for r in results) / len(results),
+				4,
+			)
+			if results
+			else 0.0,
+		}
+
+	async def export_austin_pack(
+		self,
+		*,
+		event_limit: int = 200,
+		include_artifacts: bool = True,
+		max_artifact_bytes: int = 64_000,
+	) -> dict[str, Any]:
+		"""
+		Phase 9 — self-contained pack for Austin / external viz consumers.
+
+		Includes snapshot graph, recent events, optional artifact samples,
+		and the frozen event contract version stamp.
+		"""
+		from ..orchestration.commons_mirror import mirror_status
+
+		snap = await self.city_snapshot(event_limit=event_limit)
+		heartbeat = await self.city_heartbeat()
+
+		# Compact graph nodes for viz (no full persona dumps)
+		graph_nodes: list[dict[str, Any]] = []
+		graph_edges: list[dict[str, Any]] = []
+		for fam in snap.get("families") or []:
+			for m in fam.get("members") or []:
+				graph_nodes.append(
+					{
+						"id": m["agent_id"],
+						"member_id": m["id"],
+						"family_id": fam["id"],
+						"family_name": fam["name"],
+						"district": fam.get("default_district"),
+						"role": m.get("role_label") or m.get("role_in_family"),
+						"name": (m.get("agent") or {}).get("name"),
+						"fingerprint": (m.get("personality") or {}).get("fingerprint"),
+						"top_traits": (m.get("personality") or {}).get("top_traits") or [],
+						"generation": m.get("generation", 0),
+						"age_ticks": m.get("age_ticks", 0),
+						"max_age_ticks": m.get("max_age_ticks"),
+						"life_status": m.get("life_status", "alive"),
+						"goals": m.get("goals") or [],
+						"dreams": m.get("dreams") or [],
+						"structured_thinking": m.get("structured_thinking"),
+						"growth": m.get("growth"),
+						"successor_of_id": m.get("successor_of_id"),
+					}
+				)
+				if m.get("parent_member_id"):
+					# Resolve parent agent_id within family
+					parent = next(
+						(x for x in fam["members"] if x["id"] == m["parent_member_id"]),
+						None,
+					)
+					if parent:
+						graph_edges.append(
+							{
+								"from": parent["agent_id"],
+								"to": m["agent_id"],
+								"family_id": fam["id"],
+								"kind": "lineage",
+							}
+						)
+				if m.get("successor_of_id"):
+					ancestor = next(
+						(x for x in fam["members"] if x["id"] == m["successor_of_id"]),
+						None,
+					)
+					if ancestor:
+						graph_edges.append(
+							{
+								"from": ancestor["agent_id"],
+								"to": m["agent_id"],
+								"family_id": fam["id"],
+								"kind": "legacy",
+							}
+						)
+
+		artifacts_sample: list[dict[str, Any]] = []
+		if include_artifacts:
+			for fam in snap.get("families") or []:
+				jobs = await self.jobs.list_for_family(UUID(fam["id"]), limit=3)
+				for job in jobs:
+					arts = await self.artifacts.list_for_job(job.id, limit=20)
+					for a in arts:
+						content = a.content or ""
+						truncated = False
+						if len(content.encode("utf-8")) > max_artifact_bytes:
+							content = content.encode("utf-8")[:max_artifact_bytes].decode(
+								"utf-8", errors="ignore"
+							)
+							truncated = True
+						artifacts_sample.append(
+							{
+								"job_id": str(job.id),
+								"family_id": fam["id"],
+								"path": a.path,
+								"version": a.version,
+								"content": content,
+								"truncated": truncated,
+								"created_by_agent_id": str(a.created_by_agent_id)
+								if a.created_by_agent_id
+								else None,
+							}
+						)
+
+		eco = await self.city_ecosystem(event_limit=min(40, event_limit))
+		chronicle = await self.city_chronicle(limit=min(60, event_limit), life_only=True)
+		generations = await self.generation_report()
+
+		return {
+			"pack_version": "1.3",
+			"contract": "docs/CITY_EVENTS.md",
+			"generated_at": datetime.utcnow().isoformat(),
+			"vitals": {
+				"agent_count": snap["agent_count"],
+				"family_count": snap["family_count"],
+				"distinct_personalities": snap["distinct_personalities"],
+				"districts": snap["districts"],
+				"progress": snap["progress"],
+				"living": (eco.get("city") or {}).get("living"),
+				"deceased": (eco.get("city") or {}).get("deceased"),
+				"generation_max": (eco.get("city") or {}).get("generation_max"),
+				"avg_efficiency": (eco.get("city") or {}).get("avg_efficiency"),
+				"continuity_ok": generations.get("continuity_ok"),
+			},
+			"graph": {"nodes": graph_nodes, "edges": graph_edges},
+			"ecosystems": eco.get("ecosystems") or [],
+			"chronicle": chronicle,
+			"generations": generations,
+			"events": snap.get("events") or [],
+			"artifacts": artifacts_sample,
+			"heartbeat": heartbeat,
+			"commons_mirror": mirror_status(),
+			"hints": {
+				"poll": "GET /api/v1/city/events?family_id=…&after=…",
+				"stream": "GET /api/v1/city/events/stream?family_id=…",
+				"stream_life": "GET /api/v1/city/events/stream?city_wide=true&types=member.died,legacy.passed,life.aged",
+				"snapshot": "GET /api/v1/city/snapshot",
+				"ecosystem": "GET /api/v1/city/ecosystem",
+				"chronicle": "GET /api/v1/city/chronicle?life_only=true",
+				"generations": "GET /api/v1/city/generations",
+				"memorial": "GET /api/v1/city/memorial",
+				"life_tick": "POST /api/v1/city/life/tick",
+				"export": "GET /api/v1/city/export/austin",
+			},
+		}
+
+	async def commons_mirror_info(self, job_id: UUID | None = None) -> dict[str, Any]:
+		from ..orchestration.commons_mirror import list_mirrored_files, mirror_status
+
+		info = mirror_status()
+		if job_id is not None:
+			info["job_id"] = str(job_id)
+			info["files"] = list_mirrored_files(job_id)
+		return info
+
+	async def scale_probe(
+		self,
+		*,
+		families: int | None = None,
+		agents_per_family: int | None = None,
+		name_prefix: str = "ScaleProbe",
+		run_jobs: bool = True,
+		mode: str = "fifty",
+	) -> dict[str, Any]:
+		"""
+		Sustained probe: create families × agents (Phase 5: ≥50; Phase 6: ≥100)
+		with distinct personalities, optionally run a tiny build+run job per family.
+		"""
+		from ..orchestration.city_personalities import distinct_child_personality, parent_personality
+
+		cfg = DEFAULT_SCALE_CONFIG
+		mode_l = (mode or "fifty").lower().strip()
+		if mode_l == "hundred":
+			default_families = cfg.hundred_families
+			default_per = cfg.hundred_agents_per_family
+		else:
+			default_families = cfg.probe_families
+			default_per = cfg.probe_agents_per_family
+
+		n_families = max(1, families if families is not None else default_families)
+		per_family = max(2, agents_per_family if agents_per_family is not None else default_per)
+		# per_family includes parent, so children = per_family - 1
+		children = max(1, per_family - 1)
+
+		created_families: list[dict[str, Any]] = []
+		jobs: list[dict[str, Any]] = []
+		total_agents = 0
+		fingerprints: set[str] = set()
+
+		for i in range(n_families):
+			district = ("build", "viz", "research", "ops")[i % 4]
+			parent_p = parent_personality(family_index=i)
+			family = await self.create_family(
+				name=f"{name_prefix}-{i + 1}",
+				description=f"Phase 6 scale probe family {i + 1} ({district})",
+				default_district=district,
+				parent_name=f"{name_prefix} Parent {i + 1}",
+				role_label=parent_p["role_label"],
+				parent_knob_overrides=parent_p["knob_overrides"],
+				policy={
+					"scale_probe": True,
+					"mode": mode_l,
+					"shard": f"district:{district}",
+					"parent_fingerprint": parent_p["fingerprint"],
+				},
+			)
+			fingerprints.add(parent_p["fingerprint"])
+			fid = UUID(family["id"])
+			for c in range(children):
+				child_p = distinct_child_personality(child_index=c, family_index=i)
+				await self.spawn_child(
+					fid,
+					name=f"{name_prefix}-{i + 1}-{child_p['role_label'][:3].upper()}{c + 1}",
+					role_label=child_p["role_label"],
+					knob_overrides=child_p["knob_overrides"],
+				)
+				fingerprints.add(child_p["fingerprint"])
+			detail = await self.get_family(fid)
+			assert detail is not None
+			created_families.append(detail)
+			total_agents += len(detail["members"])
+
+			if run_jobs:
+				job = await self.start_job(
+					family_id=fid,
+					goal=f"probe write+run for {detail['name']}",
+					district=district,
+				)
+				# Prefer an executor-ish child; fall back to any child
+				agent_id = None
+				for m in detail["members"]:
+					if m.get("role_label") == "executor":
+						agent_id = UUID(m["agent_id"])
+						break
+				if agent_id is None:
+					child = next((m for m in detail["members"] if m["role_in_family"] == "child"), None)
+					agent_id = UUID(child["agent_id"]) if child else None
+				await self.execute_tool_calls(
+					UUID(job["id"]),
+					[
+						{
+							"name": "workspace_write",
+							"args": {
+								"path": f"probe/{i}.py",
+								"content": f'print("probe-{i}")\n',
+							},
+						},
+						{"name": "run_python", "args": {"path": f"probe/{i}.py"}},
+					],
+					agent_id=agent_id,
+				)
+				await self.set_job_status(
+					UUID(job["id"]),
+					status=CityJobStatus.COMPLETED.value,
+					result_summary="scale probe job",
+				)
+				jobs.append(await self.get_job(UUID(job["id"])) or job)
+
+		try:
+			from ..metrics import set_city_active_agents
+
+			set_city_active_agents(total_agents)
+		except Exception as exc:
+			log.warning("city_metric_failed", what="set_city_active_agents", error=str(exc))
+
+		return {
+			"mode": mode_l,
+			"families": len(created_families),
+			"agents": total_agents,
+			"jobs": len(jobs),
+			"family_ids": [f["id"] for f in created_families],
+			"job_ids": [j["id"] for j in jobs if j],
+			"meets_probe_bar": total_agents >= 50 and len(created_families) >= 5,
+			"meets_hundred_bar": total_agents >= 100 and len(created_families) >= 8,
+			"distinct_personalities": len(fingerprints),
+			"all_personalities_unique": len(fingerprints) == total_agents,
+			"districts": {
+				d: sum(1 for f in created_families if f.get("default_district") == d)
+				for d in ("build", "viz", "research", "ops")
+			},
+			"model_tiers": {
+				"parent": self.model_tiers.parent,
+				"child": self.model_tiers.child,
+			},
+			"path_to_100": {
+				"current_agents": total_agents,
+				"target": cfg.target_agents,
+				"next": (
+					"city awakened"
+					if total_agents >= cfg.target_agents
+					else "POST /scale/probe mode=hundred (10×10) with distinct personalities"
+				),
+			},
+		}
+
+	async def city_snapshot(self, *, event_limit: int = 80) -> dict[str, Any]:
+		"""Multi-family city view for interactive visualization (Phase 6)."""
+		summaries = await self.list_families()
+		families: list[dict[str, Any]] = []
+		agents = 0
+		fingerprints: set[str] = set()
+		by_district: dict[str, int] = {d: 0 for d in ("build", "viz", "research", "ops")}
+
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			families.append(detail)
+			agents += len(detail.get("members") or [])
+			district = detail.get("default_district") or "build"
+			by_district[district] = by_district.get(district, 0) + 1
+			for m in detail.get("members") or []:
+				fp = (m.get("personality") or {}).get("fingerprint")
+				if fp:
+					fingerprints.add(fp)
+
+		# Recent city-wide events
+		event_rows = await self.events.list_recent(limit=event_limit)
+		events = [self._serialize_event(r) for r in event_rows]
+
+		return {
+			"families": families,
+			"family_count": len(families),
+			"agent_count": agents,
+			"distinct_personalities": len(fingerprints),
+			"districts": by_district,
+			"events": events,
+			"target_agents": DEFAULT_SCALE_CONFIG.target_agents,
+			"progress": min(1.0, agents / max(1, DEFAULT_SCALE_CONFIG.target_agents)),
+		}
+
+	async def city_memorial(self, *, limit: int = 100) -> dict[str, Any]:
+		"""
+		Phase 11 — memorial roll: deceased members and the heirs who carry their legacy.
+
+		Death stays visible so Austin / operators can see knowledge continuity.
+		"""
+		summaries = await self.list_families()
+		entries: list[dict[str, Any]] = []
+		for s in summaries:
+			detail = await self.get_family(UUID(s["id"]))
+			if detail is None:
+				continue
+			members = detail.get("members") or []
+			for m in members:
+				if (m.get("life_status") or "") != FamilyMemberLifeStatus.DECEASED.value:
+					continue
+				heirs = [
+					{
+						"member_id": h["id"],
+						"agent_id": h.get("agent_id"),
+						"name": (h.get("agent") or {}).get("name"),
+						"generation": h.get("generation"),
+						"life_status": h.get("life_status"),
+					}
+					for h in members
+					if h.get("successor_of_id") == m["id"]
+				]
+				entries.append(
+					{
+						"family_id": detail["id"],
+						"family_name": detail["name"],
+						"district": detail.get("default_district"),
+						"member_id": m["id"],
+						"agent_id": m.get("agent_id"),
+						"name": (m.get("agent") or {}).get("name"),
+						"generation": m.get("generation", 0),
+						"role_label": m.get("role_label"),
+						"goals": m.get("goals") or [],
+						"dreams": m.get("dreams") or [],
+						"deceased_at": m.get("deceased_at"),
+						"heirs": heirs,
+						"legacy": m.get("legacy") or {},
+					}
+				)
+				# Cap growth
+				if len(entries) >= limit:
+					break
+			if len(entries) >= limit:
+				break
+
+		eco = await self.city_ecosystem(event_limit=10)
+		city = eco.get("city") or {}
+		return {
+			"memorial": entries,
+			"count": len(entries),
+			"city": {
+				"living": city.get("living"),
+				"deceased": city.get("deceased"),
+				"generation_max": city.get("generation_max"),
+				"avg_efficiency": city.get("avg_efficiency"),
+			},
+		}
+
+	async def bulk_cyrex_sync(
+		self,
+		family_id: UUID,
+		*,
+		living_only: bool = True,
+		dry_run: bool = False,
+		concurrency: int = 4,
+	) -> dict[str, Any]:
+		"""Push family member personas to Cyrex when configured (living by default)."""
+		from ..integrations.cyrex import CyrexClient
+
+		family = await self.get_family(family_id)
+		if family is None:
+			raise ValueError("Family not found")
+		client = CyrexClient()
+		if not client.is_configured:
+			return {
+				"configured": False,
+				"synced": 0,
+				"skipped": 0,
+				"dry_run": dry_run,
+				"results": [],
+				"detail": "Cyrex is not configured (set CYREX_URL and CYREX_API_KEY)",
+			}
+
+		candidates: list[tuple[dict[str, Any], Any]] = []
+		skipped = 0
+		for m in family["members"]:
+			if living_only and (m.get("life_status") or "alive") != FamilyMemberLifeStatus.ALIVE.value:
+				skipped += 1
+				continue
+			if living_only and m.get("is_active") is False:
+				skipped += 1
+				continue
+			agent = await self.agents.get(UUID(m["agent_id"]))
+			if agent is None or not agent.persona_id:
+				skipped += 1
+				continue
+			persona = await self.personas.get(agent.persona_id)
+			if persona is None:
+				skipped += 1
+				continue
+			candidates.append((m, persona.to_profile()))
+
+		if dry_run:
+			return {
+				"configured": True,
+				"family_id": str(family_id),
+				"synced": 0,
+				"would_sync": len(candidates),
+				"skipped": skipped,
+				"dry_run": True,
+				"results": [
+					{"agent_id": m["agent_id"], "persona_id": p.id, "ok": True, "dry_run": True}
+					for m, p in candidates
+				],
+			}
+
+		push_results = await client.push_personas(
+			[p for _, p in candidates],
+			concurrency=concurrency,
+		)
+		# Attach agent ids
+		by_persona = {p.id: m for m, p in candidates}
+		results: list[dict[str, Any]] = []
+		for r in push_results:
+			m = by_persona.get(r.get("persona_id") or "")
+			results.append(
+				{
+					**r,
+					"agent_id": m["agent_id"] if m else None,
+					"member_id": m["id"] if m else None,
+				}
+			)
+
+		await self.emit_event(
+			event_type="cyrex.sync.finished",
+			family_id=family_id,
+			payload={
+				"synced": sum(1 for r in results if r.get("ok")),
+				"failed": sum(1 for r in results if not r.get("ok")),
+				"skipped": skipped,
+				"living_only": living_only,
+			},
+		)
+		await self.db.commit()
+
+		return {
+			"configured": True,
+			"family_id": str(family_id),
+			"synced": sum(1 for r in results if r.get("ok")),
+			"skipped": skipped,
+			"dry_run": False,
+			"results": results,
+		}
+
+	async def city_cyrex_sync(
+		self,
+		*,
+		max_families: int = 20,
+		living_only: bool = True,
+		dry_run: bool = False,
+		concurrency: int = 4,
+	) -> dict[str, Any]:
+		"""Phase 11 — sync living personas across active families to Cyrex."""
+		summaries = await self.list_families()
+		summaries = summaries[: max(1, max_families)]
+		family_results: list[dict[str, Any]] = []
+		for s in summaries:
+			try:
+				family_results.append(
+					await self.bulk_cyrex_sync(
+						UUID(s["id"]),
+						living_only=living_only,
+						dry_run=dry_run,
+						concurrency=concurrency,
+					)
+				)
+			except ValueError as exc:
+				family_results.append({"family_id": s["id"], "ok": False, "error": str(exc)})
+
+		configured = any(r.get("configured") for r in family_results)
+		return {
+			"configured": configured,
+			"families": len(family_results),
+			"synced": sum(int(r.get("synced") or 0) for r in family_results),
+			"skipped": sum(int(r.get("skipped") or 0) for r in family_results),
+			"dry_run": dry_run,
+			"living_only": living_only,
+			"results": family_results,
+		}
+
+	async def enqueue_job_tools(
+		self,
+		job_id: UUID,
+		calls: list[dict[str, Any]],
+		*,
+		agent_id: UUID | None = None,
+		wait: bool = False,
+	) -> dict[str, Any]:
+		from ..orchestration.city_worker import enqueue_city_tools
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		item = await enqueue_city_tools(
+			job_id=job_id,
+			family_id=job.family_id,
+			district=job.district,
+			calls=calls,
+			agent_id=agent_id,
+			wait=wait,
+		)
+		return {
+			"work_id": item.id,
+			"status": item.status,
+			"job_id": str(job_id),
+			"district": job.district,
+			"queue": True,
+			"error": item.error,
+			"result": item.result,
+		}
+
+	async def invoke_team_on_job(
+		self,
+		job_id: UUID,
+		task: str,
+		*,
+		llm_fn,
+		agent_id: UUID | None = None,
+		use_langgraph: bool = True,
+	) -> dict[str, Any]:
+		"""
+		Phase 2/5 bridge: TeamOrchestrator with city commons tools bound to this job.
+		Structured tool_calls in specialist output invoke workspace_*/run_python.
+		"""
+		from ..orchestration.city_tools import build_city_registry
+		from ..orchestration.team import TeamOrchestrator
+		from ..orchestration.state import TeamSessionState
+
+		job = await self.jobs.get(job_id)
+		if job is None:
+			raise ValueError("Job not found")
+		if job.status == CityJobStatus.PENDING.value:
+			job.status = CityJobStatus.RUNNING.value
+			await self.db.flush()
+
+		registry = await build_city_registry(
+			f"city-team-{job_id}",
+			db=self.db,
+			job_id=job_id,
+			agent_id=agent_id,
+		)
+		orch = TeamOrchestrator(
+			llm_fn=llm_fn,
+			tool_registry=registry,
+			use_langgraph=use_langgraph,
+		)
+		session = TeamSessionState(session_id=f"city-job-{job_id}")
+		result = await orch.run(task, session=session)
+		payload = result.to_dict()
+		payload["job_id"] = str(job_id)
+		payload["city_tools"] = [t["name"] for t in registry.list_tools() if "city" in (t.get("tags") or [])]
+		await self.db.commit()
+		return payload

@@ -1,6 +1,6 @@
 # Persola Communal City — Full Implementation Roadmap
 
-**Status:** Draft  
+**Status:** Implemented (Phases 0–13)  
 **Depends on:** [COMMUNAL_CITY_DESIGN.md](./COMMUNAL_CITY_DESIGN.md)  
 **Baseline:** Persola personality engine + team orchestration (LangGraph, Team Workbench) already in repo
 
@@ -22,6 +22,22 @@ Phase 3  Wedge demo (one family, one job, City UI mode)
 Phase 4  City visualization + Austin event contract
     │
 Phase 5  Scale toward ~100 agents (workers, districts, metrics)
+    │
+Phase 6  Prove 100+ distinct personalities + interactive city viz
+    │
+Phase 7  City pulse — multi-district work + parent cohesion gate
+    │
+Phase 8  Living heartbeat — multi-contributor pulse + auto-tick
+    │
+Phase 9  Austin export pack + disk commons + cinema demo
+    │
+Phase 10 City conductor — LLM team-invoke across families
+    │
+Phase 11 Memorial + prod ops — era roll, life metrics, Cyrex living sync, ASGI workers
+    │
+Phase 12 Chronicle + Austin stream — era timeline, life SSE filters, city health, compose fix
+    │
+Phase 13 Era chamber — generation proof, cohesion UI, goals/dreams policy
 ```
 
 ---
@@ -214,6 +230,174 @@ Publish as a short section in design doc or `docs/CITY_EVENTS.md` if the schema 
 
 ---
 
+## 8b. Phase 6 — Prove 100 + interactive visualization
+
+**Goal:** A living city of **≥100 agents with unique personalities**, observable through an interactive district graph.
+
+### 8b.1 Scale awaken
+
+| Deliverable | Notes |
+|-------------|-------|
+| Distinct personalities | `city_personalities.py` — archetype baselines + index salts → unique fingerprints |
+| `POST /api/v1/city/scale/awaken` | 10 families × 10 agents across build/viz/research/ops |
+| `POST /api/v1/city/scale/probe` `mode=hundred` | Same as awaken; `mode=fifty` keeps Phase 5 bar |
+| `GET /api/v1/city/snapshot` | Multi-family payload for the city UI |
+
+### 8b.2 Interactive viz
+
+| Deliverable | Notes |
+|-------------|-------|
+| District city graph | Four columns; family clusters; click-to-inspect personality traits |
+| Live SSE | City UI prefers `EventSource` on `/events/stream` with poll fallback |
+| Awaken control | **Awaken 100** button + progress to target |
+
+### 8b.3 Exit criteria
+
+- Probe reports `meets_hundred_bar` and `all_personalities_unique`.
+- UI shows district layout, selectable agents with trait bars, live pulses.
+
+---
+
+## 8c. Phase 7 — City pulse + ecosystem cohesion
+
+**Goal:** The awakened city *works* — families across districts execute personality-routed jobs; parents merge or veto; **ecosystems are visible** (goals, dreams, structured thinking, cohesion).
+
+| Deliverable | Notes |
+|-------------|-------|
+| `POST /api/v1/city/pulse` | Each active family runs district-specific commons work |
+| Personality routing | `city_pulse.py` picks executor/creative/analyst/… by district (**living only**) |
+| `POST /jobs/{id}/cohesion/decide` | Parent `merge` / `veto` with `cohesion_min` policy |
+| `GET /api/v1/city/ecosystem` | Family ecosystems: cohesion, goals/dreams, living/deceased, efficiency |
+| Member life fields | goals, dreams, structured_thinking, growth, age (Alembic `005`) |
+| Events | `city.pulse.*`, `cohesion.veto`, `life.aged` |
+| UI | **Pulse city** + district filters + ecosystem vitals |
+
+### 8c.1 Exit criteria
+
+- Pulse across ≥4 families covers multiple districts with merge/veto decisions.
+- Ecosystem payload exposes per-family cohesion + shared goals/dreams.
+- Graph pulses update from pulse events; district filters hide/show columns.
+
+---
+
+## 8d. Phase 8 — Living heartbeat + generational death
+
+**Goal:** The city keeps working; **death is natural**. Members age out; legacy (personality knobs, tools, goals, dreams, growth) passes to heirs so **efficiency does not collapse**.
+
+| Deliverable | Notes |
+|-------------|-------|
+| Multi-contributor pulse | Support roles write notes; district lead builds/runs |
+| `GET /api/v1/city/heartbeat` | Vitals + living/deceased + generation era + efficiency |
+| `POST /api/v1/city/heartbeat/tick` | Life tick (age/death/succession) + pulse |
+| `POST /api/v1/city/life/tick` | Explicit generational tick |
+| Succession | `member.died` → `legacy.passed` → heir spawn (`successor_of_id`) |
+| UI Heartbeat / **Generations** | Auto-tick; ghost nodes for deceased; G# badges |
+
+### 8d.1 Exit criteria
+
+- Pulse reports `avg_contributors ≥ 2` on seeded multi-role families.
+- After forced aging past `max_age_ticks`, deaths spawn heirs and `efficiency_preserved` is true.
+- Heartbeat tick returns vitals + life + pulse payloads.
+
+---
+
+## 8e. Phase 9 — Austin pack + disk commons + cinema
+
+**Goal:** Hand Austin a self-contained viz pack; optionally mirror commons to disk; ship a one-click cinema demo.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `GET /api/v1/city/export/austin` | Graph nodes/edges, events, artifact samples, contract hints |
+| Disk commons | `PERSOLA_CITY_COMMONS_ROOT` mirrors writes under `jobs/{id}/…` |
+| `GET /api/v1/city/commons/status` | Mirror enabled + optional job file list |
+| UI **Cinema** / **Export Austin** | Auto awaken+pulse+district spotlight; download JSON pack |
+
+### 8e.1 Exit criteria
+
+- Export pack has `pack_version`, graph, events, hints.
+- With commons root set, artifact writes appear on disk.
+
+---
+
+## 8f. Phase 10 — City conductor
+
+**Goal:** Cognitive conduction — families don’t only run scripted tools; when an LLM is available, TeamOrchestrator plans/builds against the commons.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `POST /api/v1/city/conduct` | Conduct N families; `use_llm` prefers TeamOrchestrator |
+| Tool fallback | If no LLM, multi-contributor pulse tools still run (CI-safe) |
+| Events | `city.conduct.started` / `city.conduct.finished` |
+| UI **Conduct** | One-click conductor from City view |
+
+### 8f.1 Exit criteria
+
+- Conduct without LLM reports `mode=tools` and completes merge/veto.
+- Conduct with stub/real LLM emits conduct events and returns team payload.
+
+---
+
+## 8g. Phase 11 — Memorial + production ops
+
+**Goal:** Death remains visible; ops can run and sync the living city.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `GET /api/v1/city/memorial` | Deceased roll + heirs (legacy continuity) |
+| Life Prometheus gauges | living / deceased / generation_max / efficiency / deaths / successions |
+| `POST /api/v1/city/cyrex/sync` | City-wide Cyrex push (living-only, dry_run) |
+| Family Cyrex sync | `living_only` + `dry_run` query flags; bounded concurrency |
+| ASGI workers | `PERSOLA_WORKERS`; `docker-compose.prod.yml`; `persola-server` respects DEBUG |
+| Cinema | Pulse → life tick → memorial in UI |
+
+### 8g.1 Exit criteria
+
+- Memorial lists deceased with at least one heir after life tick.
+- Cyrex dry_run reports `would_sync` without network when configured flag is off / dry.
+- Metrics helpers update after ecosystem / life tick.
+
+---
+
+## 8h. Phase 12 — Chronicle + Austin stream hardening
+
+**Goal:** Austin (and operators) can follow the city's era as a timeline and stream life events city-wide.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `GET /api/v1/city/chronicle` | Era timeline; `life_only=true` filters death/legacy/spawn |
+| `GET /api/v1/city/health` | Readiness: db + living/deceased + queue |
+| SSE `city_wide` + `types=` | Stream without family_id; filter `member.died,legacy.passed,…` |
+| Austin pack **v1.2** | Includes `chronicle` + life stream hints |
+| Compose / Dockerfile | Repo-root build context; entrypoint auto-migrate; city healthcheck |
+
+### 8h.1 Exit criteria
+
+- Chronicle after life tick includes death/legacy events.
+- City-wide SSE hello advertises `city_wide` + types.
+- `GET /city/health` returns `ok: true` against test DB.
+
+---
+
+## 8i. Phase 13 — Era chamber + generation proof
+
+**Goal:** Make the thesis visible and measurable — death is natural; productivity survives generations; families cohere by personality/goals/dreams.
+
+| Deliverable | Notes |
+|-------------|-------|
+| `GET /api/v1/city/generations` | Cohorts, productivity_index, last_life_proof, continuity_ok |
+| `PATCH /families/{id}/policy` | `max_age_ticks`, `cohesion_min` |
+| `PATCH /members/{id}/life` | goals, dreams, structured_thinking |
+| Austin pack **v1.3** | Includes `generations` |
+| UI **Era chamber** | Generation bars, cohesion cards, chronicle, continuity pill |
+
+### 8i.1 Exit criteria
+
+- After life tick, generations report has legacy_edges ≥ 1 and last_life_proof.efficiency_preserved.
+- Policy patch updates family.policy and living member max_age_ticks.
+- Era chamber renders without breaking City view.
+
+---
+
 ## 9. Suggested file / module layout
 
 ```text
@@ -262,20 +446,27 @@ docs/
 
 ## 12. Milestone checklist
 
-- [ ] **P0** Design + roadmap docs merged
-- [ ] **P1** City schema + `/api/v1/city` CRUD/lineage/jobs
-- [ ] **P2** `workspace_*` + sandboxed `run_python` + orchestrator tool calls
-- [ ] **P3** Wedge demo: one family builds and runs; UI City mode
-- [ ] **P4** City graph + live events; Austin contract documented
-- [ ] **P5** Scale path to ~100 with workers/districts/metrics
+- [x] **P0** Design + roadmap docs merged
+- [x] **P1** City schema + `/api/v1/city` CRUD/lineage/jobs
+- [x] **P2** `workspace_*` + sandboxed `run_python` + orchestrator tool calls
+- [x] **P3** Wedge demo: one family builds and runs; UI City mode
+- [x] **P4** City graph + live events; Austin contract documented
+- [x] **P5** Scale path to ~100 with workers/districts/metrics
+- [x] **P6** Prove ≥100 distinct personalities + interactive city visualization
+- [x] **P7** City pulse + parent cohesion merge/veto + district filters
+- [x] **P8** Living heartbeat — multi-contributor pulse + auto-tick
+- [x] **P9** Austin export pack + disk commons mirror + cinema demo
+- [x] **P10** City conductor — LLM team-invoke / tool fallback across families
+- [x] **P11** Memorial + life metrics + Cyrex living sync + prod ASGI
+- [x] **P12** Chronicle + city-wide life SSE + health + compose fix
+- [x] **P13** Era chamber + generation continuity proof
 
 ---
 
 ## 13. Immediate next implementation step
 
-After these docs land:
+Phases 0–13 are on the communal-city branch. Remaining:
 
-1. Alembic migration for city tables (Phase 1).
-2. `city_service` + `/api/v1/city` routes.
-3. `city_tools.py` sandbox handlers wired into team/city job invoke (Phase 2).
-4. Thin City mode on Team Workbench to prove build+run end-to-end (Phase 3).
+1. Staging compose prod + Austin wiring to pack **v1.3** / generations / life SSE.
+2. Real Cyrex keys: dry_run then `POST /city/cyrex/sync`.
+3. Optional: operator edits for goals/dreams in inspect panel; remove deprecated `tables.py`.
