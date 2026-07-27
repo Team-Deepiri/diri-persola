@@ -77,13 +77,13 @@ async def list_llm_models(provider: Optional[str] = None) -> dict[str, Any]:
 				"available": True,
 				"models": models,
 			}
-		except Exception as exc:
+		except Exception as _exc:
 			return {
 				"provider": "ollama",
 				"base_url": client.base_url,
 				"available": False,
 				"models": [],
-				"error": str(exc),
+				"error": "Unable to fetch Ollama models.",
 			}
 	return {
 		"provider": p,
