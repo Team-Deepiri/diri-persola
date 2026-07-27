@@ -131,5 +131,10 @@ async def ollama_health() -> dict[str, Any]:
 			resp.raise_for_status()
 			models = [m.get("name") for m in (resp.json().get("models") or [])]
 			return {"ok": True, "base_url": base, "models": models, "count": len(models)}
-	except Exception as exc:
-		return {"ok": False, "base_url": base, "error": str(exc), "models": []}
+	except Exception:
+		return {
+			"ok": False,
+			"base_url": base,
+			"error": "Unable to reach Ollama service.",
+			"models": [],
+		}
