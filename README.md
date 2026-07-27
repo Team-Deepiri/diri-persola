@@ -1,4 +1,5 @@
 # Deepiri Persola
+<img width="958" height="452" alt="image" src="https://github.com/user-attachments/assets/cfac9260-125e-4995-aa84-ea21e0374fb9" />
 
 Agentic Personality Framework - Create AI agents with customizable personalities.
 
