@@ -33,6 +33,8 @@ type Props = {
   continuityOk?: boolean;
   selectedAgentId?: string | null;
   onSelectAgent?: (member: GraphMember | null) => void;
+  onAwaken?: () => void;
+  awakening?: boolean;
   width?: number;
   height?: number;
 };
@@ -68,6 +70,8 @@ export function CityOverview({
   continuityOk,
   selectedAgentId,
   onSelectAgent,
+  onAwaken,
+  awakening = false,
   width = 1100,
   height = 640,
 }: Props) {
@@ -206,8 +210,17 @@ export function CityOverview({
     return (
       <div className="city-overview empty">
         <div className="overview-empty-copy">
-          <span className="brand">Persola</span>
-          <p>Awaken the city to see the overall ecosystem — districts, generations, and legacy.</p>
+          <img src="/deepiri-logo.png" alt="" className="empty-logo" width={56} height={56} />
+          <span className="brand">Communal City</span>
+          <p>
+            The city is dormant. Awaken agent ecosystems — families, districts, generations — to see
+            the living map.
+          </p>
+          {onAwaken && (
+            <button type="button" className="empty-awaken" onClick={onAwaken} disabled={awakening}>
+              {awakening ? 'Awakening…' : 'Awaken 100 agents'}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -226,9 +239,9 @@ export function CityOverview({
       >
         <defs>
           <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.95" />
-            <stop offset="55%" stopColor="#ccfbf1" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#e2e8f0" stopOpacity="0" />
+            <stop offset="0%" stopColor="#f8fafc" stopOpacity="0.2" />
+            <stop offset="55%" stopColor="#e23a8c" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#0a0c10" stopOpacity="0" />
           </radialGradient>
           <filter id="softBlur" x="-40%" y="-40%" width="180%" height="180%">
             <feGaussianBlur stdDeviation="3" />
@@ -312,7 +325,7 @@ export function CityOverview({
         <circle cx={cx} cy={cy} r={72} fill="url(#coreGlow)" />
         <circle cx={cx} cy={cy} r={54} className="core-disk" />
         <text x={cx} y={cy - 10} textAnchor="middle" className="core-brand">
-          Persola
+          Deepiri
         </text>
         <text x={cx} y={cy + 12} textAnchor="middle" className="core-stat">
           {living} living

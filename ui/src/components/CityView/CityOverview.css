@@ -1,26 +1,23 @@
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Outfit:wght@400;500;600&display=swap');
-
 .city-overview {
-  --ov-ink: #14231f;
-  --ov-mist: #e8f0ec;
-  --ov-sand: #f4efe6;
-  --ov-teal: #1a7a6d;
+  --ov-ink: #e8ecf4;
+  --ov-teal: #2dd4bf;
   position: relative;
-  border-radius: 20px;
+  border-radius: 18px;
   overflow: hidden;
   background:
-    radial-gradient(80% 60% at 50% 40%, rgba(26, 122, 109, 0.14), transparent 60%),
-    radial-gradient(50% 40% at 80% 20%, rgba(180, 83, 9, 0.08), transparent 50%),
-    linear-gradient(165deg, #f7f3eb 0%, #e7efeb 45%, #dfe8f2 100%);
-  border: 1px solid #d5ddd7;
+    radial-gradient(70% 55% at 50% 42%, rgba(226, 58, 140, 0.14), transparent 58%),
+    radial-gradient(45% 40% at 82% 18%, rgba(240, 122, 58, 0.12), transparent 50%),
+    radial-gradient(40% 35% at 15% 80%, rgba(45, 212, 191, 0.08), transparent 55%),
+    linear-gradient(165deg, #0e1219 0%, #121824 50%, #0a0c10 100%);
+  border: 1px solid rgba(232, 236, 244, 0.08);
   min-height: 420px;
-  font-family: 'Outfit', system-ui, sans-serif;
+  font-family: var(--font-body, 'Manrope', sans-serif);
 }
 
 .city-overview.empty {
   display: grid;
   place-items: center;
-  min-height: 360px;
+  min-height: 420px;
 }
 
 .overview-empty-copy {
@@ -29,23 +26,46 @@
   padding: 2rem;
 }
 
+.overview-empty-copy .empty-logo {
+  display: block;
+  margin: 0 auto 14px;
+  border-radius: 12px;
+}
+
 .overview-empty-copy .brand,
 .core-brand {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-display, 'Sora', sans-serif);
   font-weight: 700;
   letter-spacing: -0.03em;
 }
 
 .overview-empty-copy .brand {
   display: block;
-  font-size: 2.4rem;
+  font-size: 1.85rem;
   color: var(--ov-ink);
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.55rem;
 }
 
 .overview-empty-copy p {
-  color: #5c6b66;
-  margin: 0;
+  color: #8b95a8;
+  margin: 0 0 1.25rem;
+  line-height: 1.5;
+}
+
+.empty-awaken {
+  border: none;
+  border-radius: 10px;
+  padding: 11px 18px;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(120deg, #e23a8c, #f07a3a);
+}
+
+.empty-awaken:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .overview-svg {
@@ -59,45 +79,41 @@
 }
 
 .core-disk {
-  fill: #14231f;
+  fill: #0a0c10;
   opacity: 0.92;
 }
 
 .core-brand {
   fill: #f7f3eb;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .core-stat {
   fill: #99f6e4;
   font-size: 12px;
   font-weight: 600;
-  font-family: 'Outfit', sans-serif;
 }
 
 .core-sub {
   fill: #94a3b8;
   font-size: 10px;
-  font-family: 'Outfit', sans-serif;
 }
 
 .district-title {
-  font-family: 'Outfit', sans-serif;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.14em;
 }
 
 .gen-label-svg {
-  font-family: 'Outfit', sans-serif;
   font-size: 10px;
-  fill: #475569;
+  fill: #94a3b8;
   font-weight: 600;
 }
 
 .overview-lineage {
-  stroke: #94a3b8;
-  stroke-opacity: 0.35;
+  stroke: #64748b;
+  stroke-opacity: 0.45;
   stroke-width: 1;
 }
 
@@ -113,8 +129,8 @@
 
 .breath-ring {
   fill: none;
-  stroke: #1a7a6d;
-  stroke-opacity: 0.18;
+  stroke: #2dd4bf;
+  stroke-opacity: 0.22;
   stroke-width: 1;
   animation: breathe 5.5s ease-in-out infinite;
   transform-origin: center;
@@ -123,7 +139,7 @@
 
 .breath-ring.delay {
   animation-delay: 1.2s;
-  stroke-opacity: 0.1;
+  stroke-opacity: 0.12;
 }
 
 @keyframes breathe {
@@ -155,14 +171,12 @@
   fill: #f8fafc;
   font-size: 7px;
   font-weight: 700;
-  font-family: 'Outfit', sans-serif;
   pointer-events: none;
 }
 
 .ov-gen-badge {
-  fill: #475569;
+  fill: #94a3b8;
   font-size: 7px;
-  font-family: 'Outfit', sans-serif;
   pointer-events: none;
 }
 
@@ -185,18 +199,18 @@
   position: absolute;
   z-index: 5;
   transform: translate(-10%, -120%);
-  background: rgba(20, 35, 31, 0.94);
+  background: rgba(10, 12, 16, 0.94);
   color: #f7f3eb;
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 0.78rem;
   pointer-events: none;
   max-width: 220px;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.25);
+  border: 1px solid rgba(232, 236, 244, 0.12);
 }
 
 .overview-tooltip strong {
-  font-family: 'Fraunces', Georgia, serif;
+  font-family: var(--font-display, 'Sora', sans-serif);
   font-size: 0.95rem;
 }
 
@@ -216,9 +230,9 @@
   gap: 14px;
   padding: 10px 16px 14px;
   font-size: 0.72rem;
-  color: #5c6b66;
-  border-top: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(247, 243, 235, 0.65);
+  color: #8b95a8;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .overview-legend .swatch {
@@ -231,24 +245,18 @@
 }
 
 .overview-legend .swatch.living {
-  background: #1a7a6d;
+  background: #2dd4bf;
 }
 
 .overview-legend .swatch.dead {
-  background: #94a3b8;
-  border: 1px dashed #64748b;
+  background: #64748b;
+  border: 1px dashed #94a3b8;
 }
 
 .overview-legend .swatch.legacy {
-  background: linear-gradient(90deg, #94a3b8, #1a7a6d);
+  background: linear-gradient(90deg, #64748b, #2dd4bf);
   border-radius: 2px;
   height: 3px;
   width: 14px;
   vertical-align: middle;
-}
-
-@media (max-width: 720px) {
-  .city-overview {
-    border-radius: 14px;
-  }
 }

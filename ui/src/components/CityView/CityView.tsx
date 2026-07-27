@@ -242,7 +242,7 @@ export function CityView() {
   const [memorial, setMemorial] = useState<MemorialPayload | null>(null);
   const [generations, setGenerations] = useState<GenerationsPayload | null>(null);
   const [chronicle, setChronicle] = useState<ChroniclePayload | null>(null);
-  const [eraOpen, setEraOpen] = useState(true);
+  const [eraOpen, setEraOpen] = useState(false);
   const [vizMode, setVizMode] = useState<'overview' | 'districts'>('overview');
   const [cityMode, setCityMode] = useState(true);
   const [job, setJob] = useState<Job | null>(null);
@@ -888,86 +888,88 @@ export function CityView() {
     <div className="city-view">
       <header className="city-header">
         <div>
-          <h1>Persola City</h1>
+          <h1>Communal City</h1>
           <p className="city-sub">
-            Agent ecosystems — families in cohesion by personality, goals, and dreams. Age and growth
-            compound; death is natural — legacy passes so efficiency survives generations. Austin:{' '}
-            <code>/api/v1/city/events/stream</code>
+            Living agent ecosystems — cohesion, growth, death, and legacy across generations.
           </p>
         </div>
         <div className="city-actions">
-          <label className="live-toggle">
-            <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
-            Live
-          </label>
-          <label className="live-toggle">
-            <input
-              type="checkbox"
-              checked={streamMode}
-              onChange={(e) => setStreamMode(e.target.checked)}
-            />
-            SSE
-          </label>
-          <label className="live-toggle">
-            <input
-              type="checkbox"
-              checked={heartbeat}
-              onChange={(e) => setHeartbeat(e.target.checked)}
-            />
-            Heartbeat
-          </label>
-          <button type="button" className="btn ghost" onClick={() => setCityMode(true)} disabled={loading}>
-            City view
-          </button>
-          <button
-            type="button"
-            className={`btn ghost${vizMode === 'overview' ? ' primary' : ''}`}
-            onClick={() => {
-              setCityMode(true);
-              setVizMode('overview');
-            }}
-            disabled={loading}
-          >
-            Overall viz
-          </button>
-          <button
-            type="button"
-            className={`btn ghost${vizMode === 'districts' ? ' primary' : ''}`}
-            onClick={() => {
-              setCityMode(true);
-              setVizMode('districts');
-            }}
-            disabled={loading}
-          >
-            Districts
-          </button>
-          <button type="button" className="btn ghost" onClick={onSeed} disabled={loading}>
-            Seed family
-          </button>
+          <div className="viz-toggle" role="group" aria-label="Visualization mode">
+            <button
+              type="button"
+              className={vizMode === 'overview' ? 'on' : ''}
+              onClick={() => {
+                setCityMode(true);
+                setVizMode('overview');
+              }}
+              disabled={loading}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              className={vizMode === 'districts' ? 'on' : ''}
+              onClick={() => {
+                setCityMode(true);
+                setVizMode('districts');
+              }}
+              disabled={loading}
+            >
+              Districts
+            </button>
+          </div>
           <button type="button" className="btn accent" onClick={onAwaken} disabled={loading}>
-            {loading ? 'Working…' : 'Awaken 100'}
+            {loading ? 'Working…' : 'Awaken'}
           </button>
-          <button type="button" className="btn pulse-btn" onClick={onPulse} disabled={loading}>
-            Pulse city
+          <button type="button" className="btn" onClick={onPulse} disabled={loading}>
+            Pulse
           </button>
-          <button type="button" className="btn ghost" onClick={onLifeTick} disabled={loading}>
+          <button type="button" className="btn" onClick={onLifeTick} disabled={loading}>
             Generations
           </button>
-          <button type="button" className="btn ghost" onClick={() => setEraOpen((v) => !v)} disabled={loading}>
-            {eraOpen ? 'Hide era' : 'Era chamber'}
+          <button type="button" className="btn" onClick={() => setEraOpen((v) => !v)} disabled={loading}>
+            {eraOpen ? 'Hide era' : 'Era'}
           </button>
-          <button type="button" className="btn ghost" onClick={onConduct} disabled={loading}>
-            Conduct
-          </button>
-          <button type="button" className="btn cinema-btn" onClick={onCinema} disabled={loading || cinema}>
+          <button type="button" className="btn" onClick={onCinema} disabled={loading || cinema}>
             {cinema ? 'Cinema…' : 'Cinema'}
           </button>
-          <button type="button" className="btn ghost" onClick={onExportAustin} disabled={loading}>
-            Export Austin
-          </button>
-          <button type="button" className="btn primary" onClick={onWedgeRun} disabled={loading}>
-            Run wedge
-          </button>
+          <details className="more-actions">
+            <summary>More</summary>
+            <div className="more-menu">
+              <label className="live-toggle">
+                <input type="checkbox" checked={live} onChange={(e) => setLive(e.target.checked)} />
+                Live
+              </label>
+              <label className="live-toggle">
+                <input
+                  type="checkbox"
+                  checked={streamMode}
+                  onChange={(e) => setStreamMode(e.target.checked)}
+                />
+                SSE
+              </label>
+              <label className="live-toggle">
+                <input
+                  type="checkbox"
+                  checked={heartbeat}
+                  onChange={(e) => setHeartbeat(e.target.checked)}
+                />
+                Heartbeat
+              </label>
+              <button type="button" className="btn" onClick={onSeed} disabled={loading}>
+                Seed family
+              </button>
+              <button type="button" className="btn" onClick={onConduct} disabled={loading}>
+                Conduct
+              </button>
+              <button type="button" className="btn" onClick={onExportAustin} disabled={loading}>
+                Export Austin
+              </button>
+              <button type="button" className="btn" onClick={onWedgeRun} disabled={loading}>
+                Run wedge
+              </button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -1198,6 +1200,8 @@ export function CityView() {
                 continuityOk={generations?.continuity_ok}
                 selectedAgentId={selected?.agent_id ?? null}
                 onSelectAgent={setSelected}
+                onAwaken={onAwaken}
+                awakening={loading}
                 height={560}
               />
             ) : (
