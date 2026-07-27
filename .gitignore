@@ -43,3 +43,8 @@ ENV/
 
 # Keep poetry lock
 !poetry.lock
+
+.env
+.env.local
+.env.*.local
+
