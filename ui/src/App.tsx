@@ -5,7 +5,19 @@ import { ConversationView } from './components/Conversation';
 import { AnalysisView } from './components/Analysis';
 import { BlendTool } from './components/BlendTool';
 import { TeamWorkbench } from './components/TeamWorkbench';
+import { CityView } from './components/CityView';
 import { PersonaLibrary } from './components/PersonaLibrary';
+import { SettingsView } from './components/Settings';
+import {
+  IconBlend,
+  IconBot,
+  IconCity,
+  IconSearch,
+  IconSettings,
+  IconSliders,
+  IconUser,
+  IconUsers,
+} from './components/NavIcons';
 import './App.css';
 
 function AgentChatPage() {
@@ -20,39 +32,58 @@ function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <NavLink to="/" className="logo" style={{ textDecoration: 'none' }}>
-          <div className="logo-icon">P</div>
-          Persola
+        <NavLink to="/" className="logo">
+          <img
+            className="logo-icon"
+            src="/deepiri-logo.png"
+            alt=""
+            width={36}
+            height={36}
+          />
+          <span className="logo-text">
+            <span className="logo-deepiri">Deepiri</span>
+            <span className="logo-product">Persola</span>
+          </span>
         </NavLink>
 
         <nav className="nav">
           <div className="nav-section">
             <div className="nav-title">Persona</div>
             <NavLink to="/" end className={navCls}>
-              <span>🎛️</span> Tuning Lab
+              <IconSliders /> Tuning Lab
             </NavLink>
             <NavLink to="/personas" className={navCls}>
-              <span>👤</span> Personas
+              <IconUser /> Personas
             </NavLink>
           </div>
 
           <div className="nav-section">
             <div className="nav-title">Runtime</div>
             <NavLink to="/agents" className={navCls}>
-              <span>🤖</span> Agents
+              <IconBot /> Agents
             </NavLink>
           </div>
 
           <div className="nav-section">
             <div className="nav-title">Tools</div>
             <NavLink to="/analyze" className={navCls}>
-              <span>🔍</span> Analyze Style
+              <IconSearch /> Analyze
             </NavLink>
             <NavLink to="/blend" className={navCls}>
-              <span>🎭</span> Blend
+              <IconBlend /> Blend
             </NavLink>
             <NavLink to="/teams" className={navCls}>
-              <span>👥</span> Team
+              <IconUsers /> Team
+            </NavLink>
+            <NavLink to="/city" className={navCls}>
+              <IconCity /> City
+            </NavLink>
+          </div>
+
+          <div className="nav-section">
+            <div className="nav-title">System</div>
+            <NavLink to="/settings" className={navCls}>
+              <IconSettings /> Settings
             </NavLink>
           </div>
         </nav>
@@ -67,6 +98,8 @@ function App() {
           <Route path="/analyze" element={<AnalysisView />} />
           <Route path="/blend" element={<BlendTool />} />
           <Route path="/teams" element={<TeamWorkbench />} />
+          <Route path="/city" element={<CityView />} />
+          <Route path="/settings" element={<SettingsView />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

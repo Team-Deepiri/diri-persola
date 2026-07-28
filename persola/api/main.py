@@ -117,9 +117,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from .city import router as city_router
 from .teams import router as teams_router
+from .settings import router as settings_router
 
 app.include_router(teams_router)
+app.include_router(city_router)
+app.include_router(settings_router)
 
 engine = PersonaEngine()
 cyrex_client = CyrexClient()
@@ -214,11 +218,15 @@ app.add_route("/metrics", metrics_endpoint, methods=["GET"])
 
 @app.get("/health")
 async def health(db: AsyncSession = Depends(get_db)):
+    from ..integrations.llm_settings import load_llm_settings
+
     db_ok = await check_db_health()
+    settings = load_llm_settings()
     return {
         "status": db_ok and "healthy" or "degraded",
         "database": db_ok,
-        "llm_provider": os.getenv("OPENAI_API_KEY") and "openai" or os.getenv("ANTHROPIC_API_KEY") and "anthropic" or "ollama",
+        "llm_provider": settings.provider,
+        "llm_model": settings.resolved_model(),
     }
 
 
@@ -847,31 +855,47 @@ class InvokeRequest(BaseModel):
 @app.get("/api/v1/provider/status")
 async def get_provider_status(db: AsyncSession = Depends(get_db)):
     """Get LLM provider status"""
-    providers = []
-    
-    if os.getenv("OPENAI_API_KEY"):
-        providers.append({
+    from ..integrations.llm_settings import load_llm_settings
+
+    settings = load_llm_settings()
+    providers = [
+        {
+            "type": "ollama",
+            "available": True,
+            "base_url": settings.ollama_base_url,
+            "model": settings.model if settings.provider == "ollama" else settings.model,
+            "active": settings.provider == "ollama",
+        },
+        {
             "type": "openai",
-            "available": True,
-            "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-        })
-    
-    if os.getenv("ANTHROPIC_API_KEY"):
-        providers.append({
+            "available": bool(settings.resolved_api_key("openai")),
+            "model": settings.openai_model,
+            "active": settings.provider == "openai",
+        },
+        {
             "type": "anthropic",
-            "available": True,
-            "model": "claude-3-sonnet-20240229",
-        })
-    
-    providers.append({
-        "type": "ollama",
-        "available": True,
-        "base_url": os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
-        "model": os.getenv("LOCAL_LLM_MODEL", "llama3:8b"),
-    })
-    
+            "available": bool(settings.resolved_api_key("anthropic")),
+            "model": settings.anthropic_model,
+            "active": settings.provider == "anthropic",
+        },
+        {
+            "type": "gemini",
+            "available": bool(settings.resolved_api_key("gemini")),
+            "model": settings.gemini_model,
+            "active": settings.provider == "gemini",
+        },
+        {
+            "type": "openrouter",
+            "available": bool(settings.resolved_api_key("openrouter")),
+            "model": settings.openrouter_model,
+            "active": settings.provider == "openrouter",
+        },
+    ]
+
     return {
         "available": True,
+        "active_provider": settings.provider,
+        "active_model": settings.resolved_model(),
         "has_cyrex": HAS_CYREX,
         "providers": providers,
     }
@@ -985,31 +1009,35 @@ async def invoke_agent(
     )
 
     try:
-        provider_type = "auto"
-        if os.getenv("OPENAI_API_KEY"):
-            provider_type = "openai"
-        elif os.getenv("ANTHROPIC_API_KEY"):
-            provider_type = "anthropic"
-        
+        from ..integrations.llm_settings import load_llm_settings
+
+        settings = load_llm_settings()
+        provider_type = settings.provider or "ollama"
         llm = get_llm_provider(
             provider=provider_type,
-            model=agent.model or "llama3:8b",
-            temperature=agent.temperature or 0.7,
-            max_tokens=agent.max_tokens or 2000,
+            model=agent.model or settings.resolved_model(),
+            temperature=agent.temperature if agent.temperature is not None else settings.temperature,
+            max_tokens=agent.max_tokens or settings.max_tokens,
         )
         
         if not llm.is_available():
             await agent_run_repo.mark_completed(
                 run.id,
                 status="unavailable",
-                response_message="[Persola] No LLM provider available. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or ensure Ollama is running.",
+                response_message=(
+                    "[Persola] No LLM provider available. "
+                    "Open Settings and select Ollama (local) or configure a cloud API key."
+                ),
                 provider=provider_type,
                 model=agent.model,
             )
             await db.commit()
             return {
                 "agent_id": agent_id,
-                "response": "[Persola] No LLM provider available. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or ensure Ollama is running.",
+                "response": (
+                    "[Persola] No LLM provider available. "
+                    "Open Settings and select Ollama (local) or configure a cloud API key."
+                ),
                 "message": body.message,
                 "provider": provider_type,
             }
@@ -1113,8 +1141,37 @@ async def get_static(path: str, db: AsyncSession = Depends(get_db)):
 
 
 def main():
+    """ASGI entry — production workers via PERSOLA_WORKERS; reload when DEBUG."""
+    import os
+
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8002"))
+    workers = max(1, int(os.getenv("PERSOLA_WORKERS", "1")))
+    debug = os.getenv("DEBUG", "").lower() in {"1", "true", "yes"}
+    log_level = os.getenv("LOG_LEVEL", "info").lower()
+
+    # reload and multi-worker are mutually exclusive in uvicorn
+    if debug and workers == 1:
+        uvicorn.run(
+            "persola.api.main:app",
+            host=host,
+            port=port,
+            reload=True,
+            proxy_headers=True,
+            log_level=log_level,
+        )
+    else:
+        uvicorn.run(
+            "persola.api.main:app",
+            host=host,
+            port=port,
+            workers=workers,
+            proxy_headers=True,
+            forwarded_allow_ips="*",
+            log_level=log_level,
+        )
 
 
 if __name__ == "__main__":

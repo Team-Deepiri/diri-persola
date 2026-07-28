@@ -3,6 +3,14 @@ from .agent_repository import AgentRepository
 from .agent_run_repository import AgentRunRepository
 from .agent_tool_repository import AgentToolRepository
 from .base import BaseRepository
+from .city_repository import (
+    CityEventRepository,
+    CityJobRepository,
+    FamilyMemberRepository,
+    FamilyRepository,
+    WorkspaceArtifactRepository,
+    WorkspaceRunRepository,
+)
 from .message_repository import MessageRepository
 from .persona_repository import PersonaRepository
 from .persona_version_repository import PersonaVersionRepository
@@ -15,6 +23,10 @@ __all__ = [
     "AgentRunRepository",
     "AgentToolRepository",
     "BaseRepository",
+    "CityEventRepository",
+    "CityJobRepository",
+    "FamilyMemberRepository",
+    "FamilyRepository",
     "MessageRepository",
     "PersonaRepository",
     "PersonaVersionRepository",
@@ -23,4 +35,6 @@ __all__ = [
     "TeamSessionRepository",
     "TeamWorkflowRepository",
     "TeamWorkflowStepRepository",
+    "WorkspaceArtifactRepository",
+    "WorkspaceRunRepository",
 ]

@@ -1,211 +1,151 @@
 """
-Persona repository — replaces the in-memory personas_db dict.
+Persona / agent repository — compatibility layer over ``persola.db.models``.
 
-Converts between PersonaProfile (Pydantic, used by engine/API)
-and PersonaRow (SQLAlchemy, stored in Postgres).
+Historically this module used a parallel ORM in ``tables.py`` (string PKs).
+The active schema + Alembic stack is UUID-based ``PersonaModel`` / ``AgentModel``.
+This file keeps the old ``PersonaRepo`` / ``AgentRepo`` API for callers while
+reading and writing the canonical models.
 """
 
-from typing import Optional
-from datetime import datetime, timezone
-import uuid
+from __future__ import annotations
 
-from sqlalchemy import select, delete, or_
+from typing import Optional
+from uuid import UUID
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import PersonaProfile, AgentConfig
-from .tables import PersonaRow, AgentRow
+from ..models import AgentConfig, PersonaProfile
+from .models import AgentModel, PersonaModel
+from .repositories.agent_repository import AgentRepository
+from .repositories.persona_repository import PersonaRepository
 
 
-# ── Fields shared between PersonaProfile and PersonaRow ──────────────────────
-_KNOB_FIELDS = [
-    "creativity", "humor", "formality", "verbosity", "empathy", "confidence",
-    "openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism",
-    "reasoning_depth", "step_by_step", "creativity_in_reasoning", "synthetics",
-    "abstraction", "patterns",
-    "accuracy", "reliability", "caution", "consistency", "self_correction", "transparency",
-]
-
-_SHARED_FIELDS = _KNOB_FIELDS + [
-    "id", "name", "description", "system_prompt", "model", "temperature", "max_tokens",
-]
-
-
-def _row_to_profile(row: PersonaRow) -> PersonaProfile:
-    """Convert a DB row to a Pydantic PersonaProfile."""
-    data = {field: getattr(row, field) for field in _SHARED_FIELDS}
-    data["created_at"] = row.created_at
-    data["updated_at"] = row.updated_at
-    return PersonaProfile(**data)
-
-
-def _profile_to_row(profile: PersonaProfile, existing: Optional[PersonaRow] = None) -> PersonaRow:
-    """Convert a Pydantic PersonaProfile to a DB row (or update an existing one)."""
-    row = existing or PersonaRow()
-    for field in _SHARED_FIELDS:
-        setattr(row, field, getattr(profile, field))
-    row.updated_at = datetime.now(timezone.utc)
-    return row
+def _parse_uuid(value: str | UUID | None) -> UUID | None:
+	if value is None or value == "":
+		return None
+	if isinstance(value, UUID):
+		return value
+	try:
+		return UUID(str(value))
+	except (TypeError, ValueError):
+		return None
 
 
 class PersonaRepo:
-    """Async repository wrapping all persona DB operations."""
+	"""Async repository wrapping persona DB operations (profile-shaped API)."""
 
-    def __init__(self, session: AsyncSession):
-        self.session = session
+	def __init__(self, session: AsyncSession):
+		self.session = session
+		self._repo = PersonaRepository(session)
 
-    async def create(self, profile: PersonaProfile) -> PersonaProfile:
-        row = _profile_to_row(profile)
-        self.session.add(row)
-        await self.session.flush()
-        await self.session.refresh(row)
-        return _row_to_profile(row)
+	async def create(self, profile: PersonaProfile) -> PersonaProfile:
+		row = await self._repo.create(PersonaModel.from_profile(profile))
+		await self.session.flush()
+		return row.to_profile()
 
-    async def get(self, persona_id: str) -> Optional[PersonaProfile]:
-        row = await self.session.get(PersonaRow, persona_id)
-        if row is None:
-            return None
-        return _row_to_profile(row)
+	async def get(self, persona_id: str) -> Optional[PersonaProfile]:
+		uid = _parse_uuid(persona_id)
+		if uid is None:
+			# Legacy string ids / preset names — try by name
+			row = await self._repo.get_by_name(persona_id)
+			return row.to_profile() if row else None
+		row = await self._repo.get(uid)
+		return row.to_profile() if row else None
 
-    async def list_all(self) -> list[PersonaProfile]:
-        result = await self.session.execute(
-            select(PersonaRow).where(PersonaRow.is_active == True).order_by(PersonaRow.created_at)
-        )
-        return [_row_to_profile(row) for row in result.scalars().all()]
+	async def list_all(self) -> list[PersonaProfile]:
+		rows = await self._repo.list(limit=500)
+		return [r.to_profile() for r in rows]
 
-    async def update(self, persona_id: str, profile: PersonaProfile) -> Optional[PersonaProfile]:
-        row = await self.session.get(PersonaRow, persona_id)
-        if row is None:
-            return None
-        _profile_to_row(profile, existing=row)
-        row.id = persona_id  # keep original ID
-        await self.session.flush()
-        await self.session.refresh(row)
-        return _row_to_profile(row)
+	async def update(self, persona_id: str, profile: PersonaProfile) -> Optional[PersonaProfile]:
+		uid = _parse_uuid(persona_id)
+		if uid is None:
+			return None
+		row = await self._repo.get(uid)
+		if row is None:
+			return None
+		row.apply_profile(profile)
+		await self.session.flush()
+		await self.session.refresh(row)
+		return row.to_profile()
 
-    async def delete(self, persona_id: str) -> bool:
-        result = await self.session.execute(
-            delete(PersonaRow).where(PersonaRow.id == persona_id)
-        )
-        return result.rowcount > 0
+	async def delete(self, persona_id: str) -> bool:
+		uid = _parse_uuid(persona_id)
+		if uid is None:
+			return False
+		return await self._repo.delete(uid)
 
-    async def exists(self, persona_id: str) -> bool:
-        row = await self.session.get(PersonaRow, persona_id)
-        return row is not None
+	async def exists(self, persona_id: str) -> bool:
+		return (await self.get(persona_id)) is not None
 
-    async def search(self, query: str) -> list[PersonaProfile]:
-        """Search personas by name or description (case-insensitive ILIKE)."""
-        term = query.strip()
-        if not term:
-            return []
+	async def search(self, query: str) -> list[PersonaProfile]:
+		rows = await self._repo.search(query)
+		return [r.to_profile() for r in rows]
 
-        pattern = f"%{term}%"
-        result = await self.session.execute(
-            select(PersonaRow)
-            .where(PersonaRow.is_active == True)
-            .where(
-                or_(
-                    PersonaRow.name.ilike(pattern),
-                    PersonaRow.description.ilike(pattern),
-                )
-            )
-            .order_by(PersonaRow.created_at)
-        )
-        return [_row_to_profile(row) for row in result.scalars().all()]
+	async def clone(self, persona_id: str, new_name: str) -> Optional[PersonaProfile]:
+		uid = _parse_uuid(persona_id)
+		if uid is None:
+			return None
+		try:
+			row = await self._repo.clone(uid, new_name)
+		except ValueError:
+			return None
+		return row.to_profile()
 
-    async def clone(self, persona_id: str, new_name: str) -> Optional[PersonaProfile]:
-        """Duplicate an existing persona with a new ID and name."""
-        existing_row = await self.session.get(PersonaRow, persona_id)
-        if existing_row is None:
-            return None
-
-        cloned = _row_to_profile(existing_row).model_copy(deep=True)
-        cloned.id = f"persona_{uuid.uuid4().hex[:8]}"
-        cloned.name = new_name
-        return await self.create(cloned)
-
-    async def seed_presets(self, presets: dict) -> int:
-        """Idempotently insert presets if they are missing."""
-        seeded = 0
-
-        for key, preset_profile in presets.items():
-            preset_key = key.value if hasattr(key, "value") else str(key)
-            preset_id = f"preset_{preset_key}"
-
-            if await self.session.get(PersonaRow, preset_id) is not None:
-                continue
-
-            profile = preset_profile.model_copy(deep=True)
-            profile.id = preset_id
-            await self.create(profile)
-            seeded += 1
-
-        return seeded
-
-
-# ── Agent helpers ────────────────────────────────────────────────────────────
-
-_AGENT_FIELDS = [
-    "agent_id", "name", "role", "model", "temperature", "max_tokens",
-    "system_prompt", "persona_id", "memory_enabled", "session_id",
-]
-
-
-def _agent_row_to_config(row: AgentRow) -> AgentConfig:
-    data = {field: getattr(row, field) for field in _AGENT_FIELDS}
-    data["tools"] = row.tools or []
-    return AgentConfig(**data)
-
-
-def _agent_config_to_row(config: AgentConfig, existing: Optional[AgentRow] = None) -> AgentRow:
-    row = existing or AgentRow()
-    for field in _AGENT_FIELDS:
-        setattr(row, field, getattr(config, field))
-    row.tools = config.tools or []
-    row.updated_at = datetime.now(timezone.utc)
-    return row
+	async def seed_presets(self, presets: dict) -> int:
+		before = await self._repo.count()
+		await self._repo.seed_presets(presets)
+		after = await self._repo.count()
+		return max(0, after - before)
 
 
 class AgentRepo:
-    """Async repository for agent DB operations."""
+	"""Async repository for agent DB operations (config-shaped API)."""
 
-    def __init__(self, session: AsyncSession):
-        self.session = session
+	def __init__(self, session: AsyncSession):
+		self.session = session
+		self._repo = AgentRepository(session)
 
-    async def create(self, config: AgentConfig) -> AgentConfig:
-        row = _agent_config_to_row(config)
-        self.session.add(row)
-        await self.session.flush()
-        await self.session.refresh(row)
-        return _agent_row_to_config(row)
+	async def create(self, config: AgentConfig) -> AgentConfig:
+		row = await self._repo.create(AgentModel.from_config(config))
+		await self.session.flush()
+		return row.to_config()
 
-    async def get(self, agent_id: str) -> Optional[AgentConfig]:
-        row = await self.session.get(AgentRow, agent_id)
-        if row is None:
-            return None
-        return _agent_row_to_config(row)
+	async def get(self, agent_id: str) -> Optional[AgentConfig]:
+		uid = _parse_uuid(agent_id)
+		if uid is None:
+			return None
+		row = await self._repo.get(uid)
+		return row.to_config() if row else None
 
-    async def list_all(self) -> list[AgentConfig]:
-        result = await self.session.execute(
-            select(AgentRow).where(AgentRow.is_active == True).order_by(AgentRow.created_at)
-        )
-        return [_agent_row_to_config(row) for row in result.scalars().all()]
+	async def list_all(self) -> list[AgentConfig]:
+		rows = await self._repo.list_active()
+		return [r.to_config() for r in rows]
 
-    async def update(self, agent_id: str, config: AgentConfig) -> Optional[AgentConfig]:
-        row = await self.session.get(AgentRow, agent_id)
-        if row is None:
-            return None
-        _agent_config_to_row(config, existing=row)
-        row.agent_id = agent_id
-        await self.session.flush()
-        await self.session.refresh(row)
-        return _agent_row_to_config(row)
+	async def update(self, agent_id: str, config: AgentConfig) -> Optional[AgentConfig]:
+		uid = _parse_uuid(agent_id)
+		if uid is None:
+			return None
+		row = await self._repo.get(uid)
+		if row is None:
+			return None
+		row.name = config.name
+		row.role = config.role
+		row.model = config.model
+		row.temperature = config.temperature
+		row.max_tokens = config.max_tokens
+		row.system_prompt = config.system_prompt
+		row.persona_id = _parse_uuid(config.persona_id)
+		row.tools = list(config.tools or [])
+		row.memory_enabled = config.memory_enabled
+		await self.session.flush()
+		await self.session.refresh(row)
+		return row.to_config()
 
-    async def delete(self, agent_id: str) -> bool:
-        result = await self.session.execute(
-            delete(AgentRow).where(AgentRow.agent_id == agent_id)
-        )
-        return result.rowcount > 0
+	async def delete(self, agent_id: str) -> bool:
+		uid = _parse_uuid(agent_id)
+		if uid is None:
+			return False
+		return await self._repo.delete(uid)
 
-    async def exists(self, agent_id: str) -> bool:
-        row = await self.session.get(AgentRow, agent_id)
-        return row is not None
+	async def exists(self, agent_id: str) -> bool:
+		return (await self.get(agent_id)) is not None

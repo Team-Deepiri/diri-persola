@@ -47,21 +47,35 @@ class ToolRegistry:
         return await spec.handler(**kwargs)
 
     async def run_parallel(self, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Execute multiple tool calls concurrently when marked parallel_safe."""
+        """Run tool calls; ``parallel_safe=False`` tools execute serially (shared DB safety)."""
 
-        async def _one(call: Dict[str, Any]) -> Dict[str, Any]:
+        results: List[Dict[str, Any] | None] = [None] * len(calls)
+        parallel_idx: List[int] = []
+        parallel_coros: List[Any] = []
+
+        async def _run(call: Dict[str, Any]) -> Dict[str, Any]:
             name = call["name"]
             args = call.get("args", {})
             spec = self._tools.get(name)
             if spec is None:
                 return {"name": name, "error": "unknown_tool"}
-            if not spec.parallel_safe:
-                result = await spec.handler(**args)
-                return {"name": name, "result": result}
             result = await spec.handler(**args)
             return {"name": name, "result": result}
 
-        return list(await asyncio.gather(*[_one(c) for c in calls]))
+        for i, call in enumerate(calls):
+            spec = self._tools.get(call.get("name", ""))
+            if spec is not None and not spec.parallel_safe:
+                results[i] = await _run(call)
+            else:
+                parallel_idx.append(i)
+                parallel_coros.append(_run(call))
+
+        if parallel_coros:
+            parallel_results = await asyncio.gather(*parallel_coros)
+            for i, res in zip(parallel_idx, parallel_results):
+                results[i] = res
+
+        return [r if r is not None else {"name": "unknown", "error": "missing"} for r in results]
 
 
 def build_default_registry(session_id: str) -> ToolRegistry:
