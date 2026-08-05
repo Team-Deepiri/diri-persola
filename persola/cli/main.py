@@ -5,6 +5,7 @@ import click
 from .client import APIClient, CLIError
 from .commands.agent import agent_group
 from .commands.analyze import analyze_command
+from .commands.evaluate import evaluate_group
 from .commands.persona import persona_group
 from .commands.preset import preset_group
 from .output import print_json, print_status_table
@@ -41,3 +42,4 @@ cli.add_command(persona_group, name="persona")
 cli.add_command(agent_group, name="agent")
 cli.add_command(preset_group, name="preset")
 cli.add_command(analyze_command, name="analyze")
+cli.add_command(evaluate_group, name="evaluate")

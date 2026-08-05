@@ -35,6 +35,7 @@ prometheus-client = "^0.20.0"
 alembic = "^1.13.0"
 psycopg2-binary = "^2.9.9"
 greenlet = "^3.0.0"
+deepiri-helox-sdk = { git = "https://github.com/Team-Deepiri/diri-helox.git", rev = "efe99c2" }
 
 [tool.poetry.extras]
 dev = ["pytest", "pytest-asyncio", "pytest-cov", "black", "ruff", "mypy"]
