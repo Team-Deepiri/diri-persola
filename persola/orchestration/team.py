@@ -8,8 +8,10 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from persola.engine import PersonaEngine
 from persola.models import PersonaProfile
 
+from .audit_log import AuditEventType, GLOBAL_AUDIT_LOG
 from .langgraph_runtime import run_langgraph_team
 from .memory import GLOBAL_MEMORY
+from .org_chart import GLOBAL_ORG_CHART
 from .personalities import BUILTIN_ARCHETYPES, PersonalityRole
 from .router import select_delegation_plan
 from .state import TeamSessionState, WorkflowState
@@ -124,14 +126,31 @@ class TeamOrchestrator:
             tool_runner=tool_runner,
         )
 
+        team_id = session.team_id or "default"
         workflow = WorkflowState(goal=task)
         for role, output in graph_state.get("specialist_outputs", {}).items():
             workflow.add_step(role, f"As {role}, contribute on: {task}", output, tool_calls=[])
+            GLOBAL_AUDIT_LOG.record(
+                team_id=team_id,
+                event_type=AuditEventType.DECISION,
+                actor=role,
+                recipient=PersonalityRole.COORDINATOR.value,
+                summary=output[:280],
+                session_id=session.session_id,
+            )
         coordinator_output = graph_state.get("coordinator_output", "")
         workflow.add_step(
             PersonalityRole.COORDINATOR.value,
             f"Synthesize team work for: {task}",
             coordinator_output,
+        )
+        GLOBAL_AUDIT_LOG.record(
+            team_id=team_id,
+            event_type=AuditEventType.REPLY,
+            actor=PersonalityRole.COORDINATOR.value,
+            recipient="user",
+            summary=coordinator_output[:280],
+            session_id=session.session_id,
         )
         workflow.complete()
 
@@ -188,9 +207,19 @@ class TeamOrchestrator:
         session.memory_snapshot = GLOBAL_MEMORY.snapshot(session.session_id)
         session.append_message("assistant", coordinator_output)
 
+        team_id = session.team_id or "default"
         tool_results: List[Dict[str, Any]] = []
         for step in workflow.steps:
             tool_results.extend(step.tool_calls)
+            is_coordinator = step.role == PersonalityRole.COORDINATOR.value
+            GLOBAL_AUDIT_LOG.record(
+                team_id=team_id,
+                event_type=AuditEventType.REPLY if is_coordinator else AuditEventType.DECISION,
+                actor=step.role,
+                recipient="user" if is_coordinator else PersonalityRole.COORDINATOR.value,
+                summary=step.output[:280],
+                session_id=session.session_id,
+            )
 
         return TeamRunResult(
             session_id=session.session_id,
@@ -205,9 +234,21 @@ class TeamOrchestrator:
 
     async def run(self, task: str, session: Optional[TeamSessionState] = None) -> TeamRunResult:
         session = session or TeamSessionState()
+        team_id = session.team_id or "default"
         session.append_message("user", task)
         plan = select_delegation_plan(task)
         specialists: List[str] = plan["specialists"]  # type: ignore[assignment]
+
+        top = GLOBAL_ORG_CHART.top_of_chart(team_id)
+        GLOBAL_AUDIT_LOG.record(
+            team_id=team_id,
+            event_type=AuditEventType.INSTRUCTION,
+            actor="user",
+            recipient=top.role if top else PersonalityRole.COORDINATOR.value,
+            summary=task[:280],
+            session_id=session.session_id,
+            detail={"delegation_plan": plan},
+        )
 
         registry = self._tool_registry or build_default_registry(session.session_id)
 

@@ -120,10 +120,12 @@ app.add_middleware(
 from .city import router as city_router
 from .teams import router as teams_router
 from .settings import router as settings_router
+from .workqueue import router as workqueue_router
 
 app.include_router(teams_router)
 app.include_router(city_router)
 app.include_router(settings_router)
+app.include_router(workqueue_router)
 
 engine = PersonaEngine()
 cyrex_client = CyrexClient()
