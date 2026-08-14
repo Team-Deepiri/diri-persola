@@ -66,10 +66,22 @@ async def build_team_registry(
         return {"available": available, "configured": True}
 
     async def _delegate_subtask(**kwargs: Any) -> Dict[str, Any]:
+        from .task_queue import GLOBAL_TASK_QUEUE
+
+        role = kwargs.get("role", "executor")
+        subtask = kwargs.get("subtask", "")
+        task = GLOBAL_TASK_QUEUE.enqueue(
+            team_id=kwargs.get("team_id", "default"),
+            role=role,
+            subtask=subtask,
+            origin=kwargs.get("origin", "delegate_subtask"),
+            session_id=session_id,
+        )
         return {
-            "delegated_to": kwargs.get("role", "executor"),
-            "subtask": kwargs.get("subtask", ""),
-            "status": "queued",
+            "delegated_to": role,
+            "subtask": subtask,
+            "status": task.status.value,
+            "task_id": task.task_id,
         }
 
     registry.register(ToolSpec("memory_store", "Persist key/value in team memory (Redis + local).", _store, tags=["memory"]))

@@ -109,9 +109,20 @@ def build_default_registry(session_id: str) -> ToolRegistry:
     )
 
     async def _delegate(**kwargs: Any) -> Dict[str, Any]:
-        return {"delegated_to": kwargs.get("role", "executor"), "subtask": kwargs.get("subtask", ""), "status": "queued"}
+        from .task_queue import GLOBAL_TASK_QUEUE
+
+        role = kwargs.get("role", "executor")
+        subtask = kwargs.get("subtask", "")
+        task = GLOBAL_TASK_QUEUE.enqueue(
+            team_id=kwargs.get("team_id", "default"),
+            role=role,
+            subtask=subtask,
+            origin=kwargs.get("origin", "delegate_subtask"),
+            session_id=session_id,
+        )
+        return {"delegated_to": role, "subtask": subtask, "status": task.status.value, "task_id": task.task_id}
 
     registry.register(
-        ToolSpec("delegate_subtask", "Queue a subtask for another personality.", _delegate, tags=["workflow"])
+        ToolSpec("delegate_subtask", "Queue a subtask for another personality on the shared task board.", _delegate, tags=["workflow"])
     )
     return registry
