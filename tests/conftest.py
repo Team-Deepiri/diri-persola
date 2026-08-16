@@ -17,6 +17,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import StaticPool
 
 
 @compiles(JSONB, "sqlite")
@@ -59,6 +60,41 @@ async def db_session(db_engine):
 # ---------------------------------------------------------------------------
 # HTTP client fixture
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+async def workqueue_store_db():
+    """
+    Point the global workqueue stores (and CITY_WORKER_POOL) at a fresh
+    in-memory DB so persistence works in every test — including bare
+    TeamOrchestrator tests that never request a DB fixture.
+
+    Production uses the process-wide AsyncSessionLocal; this fixture replaces
+    the session factory per test and resets it on teardown.
+    """
+    from persola.db.models import Base
+    from persola.orchestration.audit_log import GLOBAL_AUDIT_LOG
+    from persola.orchestration.city_worker import CITY_WORKER_POOL
+    from persola.orchestration.org_chart import GLOBAL_ORG_CHART
+    from persola.orchestration.task_queue import GLOBAL_TASK_QUEUE
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", poolclass=StaticPool)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    GLOBAL_TASK_QUEUE.set_session_factory(lambda: factory())
+    GLOBAL_AUDIT_LOG.set_session_factory(lambda: factory())
+    GLOBAL_ORG_CHART.set_session_factory(lambda: factory())
+    CITY_WORKER_POOL.set_session_factory(lambda: factory())
+
+    yield
+
+    GLOBAL_TASK_QUEUE.set_session_factory(None)
+    GLOBAL_AUDIT_LOG.set_session_factory(None)
+    GLOBAL_ORG_CHART.set_session_factory(None)
+    CITY_WORKER_POOL.set_session_factory(None)
+    await engine.dispose()
+
 
 @pytest.fixture()
 async def http_client(db_session):

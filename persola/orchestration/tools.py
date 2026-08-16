@@ -113,7 +113,7 @@ def build_default_registry(session_id: str) -> ToolRegistry:
 
         role = kwargs.get("role", "executor")
         subtask = kwargs.get("subtask", "")
-        task = GLOBAL_TASK_QUEUE.enqueue(
+        task = await GLOBAL_TASK_QUEUE.enqueue(
             team_id=kwargs.get("team_id", "default"),
             role=role,
             subtask=subtask,

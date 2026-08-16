@@ -104,6 +104,16 @@ export function IconCity(props: IconProps) {
   );
 }
 
+export function IconWorkqueue(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="3" y="4" width="18" height="5" rx="1.5" />
+      <rect x="3" y="13" width="18" height="5" rx="1.5" />
+      <path d="M7 6.5h.01M7 15.5h.01M11 6.5h4M11 15.5h4" />
+    </Svg>
+  );
+}
+
 export function IconSettings(props: IconProps) {
   return (
     <Svg {...props}>
