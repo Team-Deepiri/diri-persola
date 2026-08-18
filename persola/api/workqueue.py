@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..db.database import get_db
 from ..integrations.llm import get_llm_provider
 from ..orchestration.audit_log import AuditEventType, GLOBAL_AUDIT_LOG
 from ..orchestration.daemon import TaskQueueWorker
@@ -26,8 +28,10 @@ router = APIRouter(prefix="/api/v1/workqueue", tags=["workqueue"])
 # ---------------------------------------------------------------- org chart
 
 @router.get("/org-chart")
-async def get_org_chart(team_id: str = "default"):
-    return GLOBAL_ORG_CHART.to_dict(team_id)
+async def get_org_chart(team_id: str = "default", db: AsyncSession = Depends(get_db)):
+    chart = await GLOBAL_ORG_CHART.to_dict(team_id, session=db)
+    await db.commit()  # seeding default nodes on first access is a write
+    return chart
 
 
 class OrgNodeRequest(BaseModel):
@@ -38,17 +42,24 @@ class OrgNodeRequest(BaseModel):
 
 
 @router.put("/org-chart/nodes")
-async def upsert_org_node(body: OrgNodeRequest, team_id: str = "default"):
-    node = GLOBAL_ORG_CHART.upsert_node(
+async def upsert_org_node(
+    body: OrgNodeRequest, team_id: str = "default", db: AsyncSession = Depends(get_db)
+):
+    node = await GLOBAL_ORG_CHART.upsert_node(
         team_id,
         OrgNode(role=body.role, title=body.title, reports_to=body.reports_to, email=body.email),
+        session=db,
     )
+    await db.commit()
     return node.to_dict()
 
 
 @router.delete("/org-chart/nodes/{role}")
-async def deactivate_org_node(role: str, team_id: str = "default"):
-    GLOBAL_ORG_CHART.deactivate(team_id, role)
+async def deactivate_org_node(
+    role: str, team_id: str = "default", db: AsyncSession = Depends(get_db)
+):
+    await GLOBAL_ORG_CHART.deactivate(team_id, role, session=db)
+    await db.commit()
     return {"role": role, "active": False}
 
 
@@ -62,19 +73,22 @@ class EnqueueTaskRequest(BaseModel):
 
 
 @router.post("/tasks")
-async def enqueue_task(body: EnqueueTaskRequest, team_id: str = "default"):
+async def enqueue_task(
+    body: EnqueueTaskRequest, team_id: str = "default", db: AsyncSession = Depends(get_db)
+):
     role = body.role
     if role is None:
-        top = GLOBAL_ORG_CHART.top_of_chart(team_id)
+        top = await GLOBAL_ORG_CHART.top_of_chart(team_id, session=db)
         role = top.role if top else "coordinator"
-    task = GLOBAL_TASK_QUEUE.enqueue(
+    task = await GLOBAL_TASK_QUEUE.enqueue(
         team_id=team_id,
         role=role,
         subtask=body.subtask,
         origin=body.origin,
         session_id=body.session_id,
+        session=db,
     )
-    GLOBAL_AUDIT_LOG.record(
+    await GLOBAL_AUDIT_LOG.record(
         team_id=team_id,
         event_type=AuditEventType.INSTRUCTION,
         actor=body.origin,
@@ -82,27 +96,31 @@ async def enqueue_task(body: EnqueueTaskRequest, team_id: str = "default"):
         summary=body.subtask[:280],
         task_id=task.task_id,
         session_id=body.session_id,
+        session=db,
     )
+    await db.commit()
     return task.to_dict()
 
 
 @router.get("/tasks/board")
-async def get_board(team_id: str = "default"):
-    return GLOBAL_TASK_QUEUE.board(team_id)
+async def get_board(team_id: str = "default", db: AsyncSession = Depends(get_db)):
+    return await GLOBAL_TASK_QUEUE.board(team_id, session=db)
 
 
 @router.get("/tasks/{task_id}")
-async def get_task(task_id: str):
-    task = GLOBAL_TASK_QUEUE.get(task_id)
+async def get_task(task_id: str, db: AsyncSession = Depends(get_db)):
+    task = await GLOBAL_TASK_QUEUE.get(task_id, session=db)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return task.to_dict()
 
 
 @router.post("/tasks/{task_id}/tick")
-async def tick_single_task(task_id: str, team_id: str = "default"):
+async def tick_single_task(
+    task_id: str, team_id: str = "default", db: AsyncSession = Depends(get_db)
+):
     """Force-process one specific task now, instead of waiting on the poller."""
-    task = GLOBAL_TASK_QUEUE.get(task_id)
+    task = await GLOBAL_TASK_QUEUE.get(task_id, session=db)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.status.value != "queued":
@@ -116,7 +134,7 @@ async def tick_single_task(task_id: str, team_id: str = "default"):
         return await llm.chat([{"role": "user", "content": user}], system_prompt=system)
 
     worker = TaskQueueWorker(team_factory=lambda: TeamOrchestrator(llm_fn=llm_fn), role=task.role)
-    result = await worker.tick(team_id)
+    result = await worker.tick(team_id, session=db)
     if result.task is None:
         raise HTTPException(status_code=409, detail="Task was claimed by another worker before this tick")
     return result.task.to_dict()
@@ -130,5 +148,8 @@ async def get_audit_trail(
     session_id: Optional[str] = None,
     task_id: Optional[str] = None,
     limit: int = 200,
+    db: AsyncSession = Depends(get_db),
 ):
-    return GLOBAL_AUDIT_LOG.timeline(team_id, session_id=session_id, task_id=task_id, limit=limit)
+    return await GLOBAL_AUDIT_LOG.timeline(
+        team_id, session_id=session_id, task_id=task_id, limit=limit, session=db
+    )

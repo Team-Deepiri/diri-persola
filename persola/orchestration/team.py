@@ -130,7 +130,7 @@ class TeamOrchestrator:
         workflow = WorkflowState(goal=task)
         for role, output in graph_state.get("specialist_outputs", {}).items():
             workflow.add_step(role, f"As {role}, contribute on: {task}", output, tool_calls=[])
-            GLOBAL_AUDIT_LOG.record(
+            await GLOBAL_AUDIT_LOG.record(
                 team_id=team_id,
                 event_type=AuditEventType.DECISION,
                 actor=role,
@@ -144,7 +144,7 @@ class TeamOrchestrator:
             f"Synthesize team work for: {task}",
             coordinator_output,
         )
-        GLOBAL_AUDIT_LOG.record(
+        await GLOBAL_AUDIT_LOG.record(
             team_id=team_id,
             event_type=AuditEventType.REPLY,
             actor=PersonalityRole.COORDINATOR.value,
@@ -212,7 +212,7 @@ class TeamOrchestrator:
         for step in workflow.steps:
             tool_results.extend(step.tool_calls)
             is_coordinator = step.role == PersonalityRole.COORDINATOR.value
-            GLOBAL_AUDIT_LOG.record(
+            await GLOBAL_AUDIT_LOG.record(
                 team_id=team_id,
                 event_type=AuditEventType.REPLY if is_coordinator else AuditEventType.DECISION,
                 actor=step.role,
@@ -239,8 +239,8 @@ class TeamOrchestrator:
         plan = select_delegation_plan(task)
         specialists: List[str] = plan["specialists"]  # type: ignore[assignment]
 
-        top = GLOBAL_ORG_CHART.top_of_chart(team_id)
-        GLOBAL_AUDIT_LOG.record(
+        top = await GLOBAL_ORG_CHART.top_of_chart(team_id)
+        await GLOBAL_AUDIT_LOG.record(
             team_id=team_id,
             event_type=AuditEventType.INSTRUCTION,
             actor="user",

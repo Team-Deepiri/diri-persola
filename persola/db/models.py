@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import UUID as PyUUID
@@ -76,6 +76,27 @@ class AgentRunStatus(str, Enum):
 	COMPLETED = "completed"
 	FAILED = "failed"
 	UNAVAILABLE = "unavailable"
+
+
+class WorkTaskStatus(str, Enum):
+	QUEUED = "queued"
+	CLAIMED = "claimed"
+	IN_PROGRESS = "in_progress"
+	BLOCKED = "blocked"
+	DONE = "done"
+	FAILED = "failed"
+
+
+class AuditEventType(str, Enum):
+	INSTRUCTION = "instruction"
+	DECISION = "decision"
+	REPLY = "reply"
+	STATUS_CHANGE = "status_change"
+	TOOL_CALL = "tool_call"
+
+
+def _utcnow() -> datetime:
+	return datetime.now(timezone.utc)
 
 
 def _score_constraints(*field_names: str) -> list[CheckConstraint]:
@@ -764,3 +785,67 @@ class CityEventModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
 	family: Mapped["FamilyModel | None"] = relationship(back_populates="events")
 	job: Mapped["CityJobModel | None"] = relationship(back_populates="events")
+
+
+class OrgNodeModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+	__tablename__ = "org_nodes"
+	__table_args__ = (
+		Index("idx_org_nodes_team_id", "team_id"),
+		UniqueConstraint("team_id", "role", name="uq_org_node_team_role"),
+	)
+
+	team_id: Mapped[str] = mapped_column(String(100), nullable=False, default="default")
+	role: Mapped[str] = mapped_column(String(100), nullable=False)
+	title: Mapped[str] = mapped_column(String(255), nullable=False)
+	reports_to: Mapped[str | None] = mapped_column(String(100), nullable=True)
+	email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+	active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class WorkTaskModel(UUIDPrimaryKeyMixin, Base):
+	__tablename__ = "work_tasks"
+	__table_args__ = (
+		Index("idx_work_tasks_team_id", "team_id"),
+		Index("idx_work_tasks_status", "status"),
+		Index("idx_work_tasks_role", "role"),
+		Index("idx_work_tasks_created_at", "created_at"),
+		UniqueConstraint("task_id", name="uq_work_tasks_task_id"),
+		_enum_constraint("status", tuple(s.value for s in WorkTaskStatus), name="ck_work_tasks_status"),
+	)
+
+	task_id: Mapped[str] = mapped_column(String(100), nullable=False)
+	team_id: Mapped[str] = mapped_column(String(100), nullable=False, default="default")
+	role: Mapped[str] = mapped_column(String(100), nullable=False, default="coordinator")
+	subtask: Mapped[str] = mapped_column(Text, nullable=False)
+	origin: Mapped[str] = mapped_column(String(100), nullable=False, default="user")
+	status: Mapped[str] = mapped_column(String(30), nullable=False, default=WorkTaskStatus.QUEUED.value)
+	result: Mapped[str | None] = mapped_column(Text, nullable=True)
+	error: Mapped[str | None] = mapped_column(Text, nullable=True)
+	parent_task_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+	session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+	claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+	completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AuditEventModel(UUIDPrimaryKeyMixin, Base):
+	__tablename__ = "audit_events"
+	__table_args__ = (
+		Index("idx_audit_events_team_id", "team_id"),
+		Index("idx_audit_events_session_id", "session_id"),
+		Index("idx_audit_events_task_id", "task_id"),
+		Index("idx_audit_events_created_at", "created_at"),
+		UniqueConstraint("event_id", name="uq_audit_events_event_id"),
+		_enum_constraint("event_type", tuple(t.value for t in AuditEventType), name="ck_audit_events_type"),
+	)
+
+	event_id: Mapped[str] = mapped_column(String(100), nullable=False)
+	team_id: Mapped[str] = mapped_column(String(100), nullable=False, default="default")
+	session_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+	task_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+	event_type: Mapped[str] = mapped_column(String(30), nullable=False, default=AuditEventType.INSTRUCTION.value)
+	actor: Mapped[str] = mapped_column(String(100), nullable=False, default="system")
+	recipient: Mapped[str | None] = mapped_column(String(100), nullable=True)
+	summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+	detail: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
