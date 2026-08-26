@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from statistics import mean
-from typing import Iterable
 
 from ..integrations.llm import PersolaLLM, get_llm_provider
 from ..models import KNOB_DEFINITIONS
@@ -51,24 +51,25 @@ class StyleAnalysis:
     notes: str = ""
 
     @classmethod
-    def from_payload(cls, payload: dict[str, object]) -> "StyleAnalysis":
+    def from_payload(cls, payload: dict[str, object]) -> StyleAnalysis:
         analysis_payload = payload.get("analysis", payload)
         if not isinstance(analysis_payload, dict):
             raise TypeError("analysis payload must be a dictionary")
 
         defaults = cls()
-        values: dict[str, object] = {
-            key: analysis_payload.get(key)
-            for key in cls.knob_keys()
-        }
-        values["confidence_score"] = payload.get("confidence_score", values.get("confidence_score", 0.0))
+        values: dict[str, object] = {key: analysis_payload.get(key) for key in cls.knob_keys()}
+        values["confidence_score"] = payload.get(
+            "confidence_score", values.get("confidence_score", 0.0)
+        )
         values["notes"] = payload.get("notes", "")
         normalized: dict[str, object] = {}
         for key, value in values.items():
             if key == "notes":
                 normalized[key] = str(value or "")
             else:
-                normalized[key] = _clamp(float(value if value is not None else getattr(defaults, key)))
+                normalized[key] = _clamp(
+                    float(value if value is not None else getattr(defaults, key))
+                )
         return cls(**normalized)
 
     @classmethod
@@ -104,7 +105,9 @@ class WritingStyleExtractor:
             raise ValueError("text must not be empty")
 
         if not self.llm.is_available():
-            return self._heuristic_analysis(sample, notes_prefix="LLM unavailable; used heuristic analysis.")
+            return self._heuristic_analysis(
+                sample, notes_prefix="LLM unavailable; used heuristic analysis."
+            )
 
         prompt = build_analysis_prompt(sample)
         response = await self.llm.generate(prompt)
@@ -156,8 +159,18 @@ class WritingStyleExtractor:
         exclamations = text.count("!")
         questions = text.count("?")
         first_person = len(re.findall(r"\b(I|me|my|mine|we|our|ours)\b", text, re.IGNORECASE))
-        hedges = len(re.findall(r"\b(maybe|perhaps|might|could|possibly|seems|appears)\b", text, re.IGNORECASE))
-        structure_markers = len(re.findall(r"\b(first|second|third|next|finally|therefore|because|however)\b", text, re.IGNORECASE))
+        hedges = len(
+            re.findall(
+                r"\b(maybe|perhaps|might|could|possibly|seems|appears)\b", text, re.IGNORECASE
+            )
+        )
+        structure_markers = len(
+            re.findall(
+                r"\b(first|second|third|next|finally|therefore|because|however)\b",
+                text,
+                re.IGNORECASE,
+            )
+        )
         humor_markers = len(re.findall(r"\b(haha|lol|funny|joke|sarcasm)\b", text, re.IGNORECASE))
 
         verbosity = _clamp(word_count / 400)
@@ -181,7 +194,10 @@ class WritingStyleExtractor:
         reliability = _clamp((conscientiousness + consistency_hint(text) + 0.8) / 3)
         caution = _clamp((hedges / max(len(sentences), 1)) + 0.2)
         consistency = _clamp(consistency_hint(text))
-        self_correction = _clamp(len(re.findall(r"\b(correct|clarify|rephrase|actually)\b", text, re.IGNORECASE)) / max(len(sentences), 1))
+        self_correction = _clamp(
+            len(re.findall(r"\b(correct|clarify|rephrase|actually)\b", text, re.IGNORECASE))
+            / max(len(sentences), 1)
+        )
         transparency = _clamp((hedges + self_correction) / max(len(sentences), 1))
         confidence_score = _clamp(min(0.65, 0.3 + word_count / 1000))
 
@@ -222,6 +238,8 @@ class WritingStyleExtractor:
 
 def consistency_hint(text: str) -> float:
     lower = text.lower()
-    repeated_transitions = len(re.findall(r"\b(for example|for instance|however|therefore|because)\b", lower))
+    repeated_transitions = len(
+        re.findall(r"\b(for example|for instance|however|therefore|because)\b", lower)
+    )
     repeated_phrases = len(re.findall(r"\b(again|consistently|always|usually)\b", lower))
     return _clamp(0.45 + repeated_transitions * 0.05 + repeated_phrases * 0.07)

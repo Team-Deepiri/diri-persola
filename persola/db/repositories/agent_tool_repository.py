@@ -18,8 +18,12 @@ class AgentToolRepository(BaseRepository[AgentToolModel]):
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
-    async def replace_for_agent(self, agent_id: UUID, tools: list[AgentToolModel]) -> list[AgentToolModel]:
-        await self.session.execute(delete(AgentToolModel).where(AgentToolModel.agent_id == agent_id))
+    async def replace_for_agent(
+        self, agent_id: UUID, tools: list[AgentToolModel]
+    ) -> list[AgentToolModel]:
+        await self.session.execute(
+            delete(AgentToolModel).where(AgentToolModel.agent_id == agent_id)
+        )
         created: list[AgentToolModel] = []
         for tool in tools:
             tool.agent_id = agent_id

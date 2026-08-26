@@ -33,7 +33,13 @@ def persona_group() -> None:
 
 
 @persona_group.command("list")
-@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
 @click.pass_context
 def list_personas(ctx: click.Context, output_format: str) -> None:
     client: APIClient = ctx.obj["client"]
@@ -46,7 +52,13 @@ def list_personas(ctx: click.Context, output_format: str) -> None:
 
 @persona_group.command("get")
 @click.argument("persona_id")
-@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
 @click.pass_context
 def get_persona(ctx: click.Context, persona_id: str, output_format: str) -> None:
     client: APIClient = ctx.obj["client"]
@@ -58,9 +70,17 @@ def get_persona(ctx: click.Context, persona_id: str, output_format: str) -> None
 @click.option("--name", required=True)
 @click.option("--description", default="")
 @click.option("--preset", default=None)
-@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
 @click.pass_context
-def create_persona(ctx: click.Context, name: str, description: str, preset: str | None, output_format: str) -> None:
+def create_persona(
+    ctx: click.Context, name: str, description: str, preset: str | None, output_format: str
+) -> None:
     client: APIClient = ctx.obj["client"]
     payload: dict[str, Any] = {"name": name, "description": description}
     if preset:
@@ -81,7 +101,13 @@ def create_persona(ctx: click.Context, name: str, description: str, preset: str 
 @click.option("--verbosity", type=float, default=None)
 @click.option("--empathy", type=float, default=None)
 @click.option("--confidence", type=float, default=None)
-@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
 @click.pass_context
 def update_persona(
     ctx: click.Context,
@@ -142,7 +168,13 @@ def export_persona(ctx: click.Context, persona_id: str, output_path: Path | None
 
 @persona_group.command("import")
 @click.argument("input_file", type=click.Path(exists=True, path_type=Path))
-@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
 @click.pass_context
 def import_persona(ctx: click.Context, input_file: Path, output_format: str) -> None:
     client: APIClient = ctx.obj["client"]
@@ -155,9 +187,17 @@ def import_persona(ctx: click.Context, input_file: Path, output_format: str) -> 
 @click.argument("persona_a")
 @click.argument("persona_b")
 @click.option("--ratio", type=float, default=0.5, show_default=True)
-@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
 @click.pass_context
-def blend_personas(ctx: click.Context, persona_a: str, persona_b: str, ratio: float, output_format: str) -> None:
+def blend_personas(
+    ctx: click.Context, persona_a: str, persona_b: str, ratio: float, output_format: str
+) -> None:
     client: APIClient = ctx.obj["client"]
     persona = client.api_request(
         "POST",

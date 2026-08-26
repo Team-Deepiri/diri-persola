@@ -15,8 +15,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.compiler import compiles
 
 
 @compiles(JSONB, "sqlite")
@@ -34,6 +34,7 @@ def anyio_backend():
 # ---------------------------------------------------------------------------
 # Database fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 async def db_engine():
@@ -60,6 +61,7 @@ async def db_session(db_engine):
 # HTTP client fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 async def http_client(db_session):
     """
@@ -69,17 +71,15 @@ async def http_client(db_session):
     are never called.  The get_db dependency is overridden to yield the
     per-test db_session.
     """
-    from persola.db.database import get_db
     from persola.api.main import app
+    from persola.db.database import get_db
 
     async def _override_get_db():
         yield db_session
 
     app.dependency_overrides[get_db] = _override_get_db
     try:
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             yield client
     finally:
         app.dependency_overrides.clear()
@@ -88,6 +88,7 @@ async def http_client(db_session):
 # ---------------------------------------------------------------------------
 # Sample-data fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def persona_payload() -> dict:

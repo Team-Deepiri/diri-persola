@@ -9,7 +9,6 @@ from persola.analysis.extractor import StyleAnalysis, WritingStyleExtractor
 from persola.analysis.mapper import StyleToKnobMapper
 from persola.analysis.prompts import build_analysis_prompt, build_analysis_retry_prompt
 
-
 SAMPLE_TEXT = (
     "The experiment demonstrated a statistically significant correlation between "
     "neural activity patterns and behavioural outcomes. Further analysis is required "
@@ -18,11 +17,29 @@ SAMPLE_TEXT = (
 )
 
 _ALL_KNOB_KEYS = (
-    "creativity", "humor", "formality", "verbosity", "empathy", "confidence",
-    "openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism",
-    "reasoning_depth", "step_by_step", "creativity_in_reasoning", "synthetics",
-    "abstraction", "patterns", "accuracy", "reliability", "caution",
-    "consistency", "self_correction", "transparency",
+    "creativity",
+    "humor",
+    "formality",
+    "verbosity",
+    "empathy",
+    "confidence",
+    "openness",
+    "conscientiousness",
+    "extraversion",
+    "agreeableness",
+    "neuroticism",
+    "reasoning_depth",
+    "step_by_step",
+    "creativity_in_reasoning",
+    "synthetics",
+    "abstraction",
+    "patterns",
+    "accuracy",
+    "reliability",
+    "caution",
+    "consistency",
+    "self_correction",
+    "transparency",
 )
 
 _MOCK_LLM_PAYLOAD = {k: 0.5 for k in _ALL_KNOB_KEYS}
@@ -34,6 +51,7 @@ _MOCK_LLM_PAYLOAD.update(
 # ---------------------------------------------------------------------------
 # StyleAnalysis dataclass
 # ---------------------------------------------------------------------------
+
 
 class TestStyleAnalysis:
     def test_to_knob_dict_returns_23_keys(self):
@@ -63,6 +81,7 @@ class TestStyleAnalysis:
 # ---------------------------------------------------------------------------
 # WritingStyleExtractor – heuristic path (LLM unavailable)
 # ---------------------------------------------------------------------------
+
 
 class TestWritingStyleExtractorHeuristic:
     @pytest.fixture()
@@ -97,6 +116,7 @@ class TestWritingStyleExtractorHeuristic:
 # WritingStyleExtractor – LLM path (mock LLM)
 # ---------------------------------------------------------------------------
 
+
 class TestWritingStyleExtractorWithMockLLM:
     @pytest.fixture()
     def extractor(self):
@@ -129,6 +149,7 @@ class TestWritingStyleExtractorWithMockLLM:
 # StyleToKnobMapper
 # ---------------------------------------------------------------------------
 
+
 class TestStyleToKnobMapper:
     @pytest.fixture()
     def mapper(self):
@@ -151,6 +172,7 @@ class TestStyleToKnobMapper:
 # ---------------------------------------------------------------------------
 # Prompt builders
 # ---------------------------------------------------------------------------
+
 
 class TestPromptBuilders:
     def test_analysis_prompt_contains_sample_text(self):

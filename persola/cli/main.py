@@ -11,7 +11,9 @@ from .output import print_json, print_status_table
 
 
 @click.group()
-@click.option("--url", default="http://localhost:8010", show_default=True, help="Base Persola server URL.")
+@click.option(
+    "--url", default="http://localhost:8010", show_default=True, help="Base Persola server URL."
+)
 @click.pass_context
 def cli(ctx: click.Context, url: str) -> None:
     """Persola command line interface."""
@@ -21,7 +23,13 @@ def cli(ctx: click.Context, url: str) -> None:
 
 
 @cli.command("status")
-@click.option("--format", "output_format", type=click.Choice(["table", "json"]), default="table", show_default=True)
+@click.option(
+    "--format",
+    "output_format",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
 @click.pass_context
 def status_command(ctx: click.Context, output_format: str) -> None:
     client: APIClient = ctx.obj["client"]

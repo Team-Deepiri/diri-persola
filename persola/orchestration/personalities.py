@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, FrozenSet, List
 
 
 class PersonalityRole(str, Enum):
@@ -21,13 +20,13 @@ class PersonalityArchetype:
     name: str
     tagline: str
     strengths: tuple[str, ...]
-    delegation_keywords: FrozenSet[str]
-    knob_overrides: Dict[str, float]
+    delegation_keywords: frozenset[str]
+    knob_overrides: dict[str, float]
     collaboration_style: str
     system_directive: str
 
 
-BUILTIN_ARCHETYPES: Dict[PersonalityRole, PersonalityArchetype] = {
+BUILTIN_ARCHETYPES: dict[PersonalityRole, PersonalityArchetype] = {
     PersonalityRole.COORDINATOR: PersonalityArchetype(
         role=PersonalityRole.COORDINATOR,
         name="Coordinator",
@@ -131,5 +130,5 @@ BUILTIN_ARCHETYPES: Dict[PersonalityRole, PersonalityArchetype] = {
 }
 
 
-def list_archetypes() -> List[PersonalityArchetype]:
+def list_archetypes() -> list[PersonalityArchetype]:
     return list(BUILTIN_ARCHETYPES.values())

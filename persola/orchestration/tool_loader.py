@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.repositories.agent_tool_repository import AgentToolRepository
-from .memory import GLOBAL_MEMORY, memory_recall_tool, memory_search_tool, memory_store_tool
+from .memory import memory_recall_tool, memory_search_tool, memory_store_tool
 from .parallel import ParallelToolExecutor
 from .redis_memory import REDIS_TEAM_MEMORY
 from .tools import ToolRegistry, ToolSpec
@@ -17,33 +18,35 @@ from .tools import ToolRegistry, ToolSpec
 async def build_team_registry(
     session_id: str,
     *,
-    db: Optional[AsyncSession] = None,
-    agent_id: Optional[UUID] = None,
+    db: AsyncSession | None = None,
+    agent_id: UUID | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     executor = ParallelToolExecutor()
 
-    async def _store(**kwargs: Any) -> Dict[str, Any]:
+    async def _store(**kwargs: Any) -> dict[str, Any]:
         key, value = kwargs["key"], kwargs["value"]
-        await REDIS_TEAM_MEMORY.store(session_id, key, value, source_role=kwargs.get("source_role", "tool"))
+        await REDIS_TEAM_MEMORY.store(
+            session_id, key, value, source_role=kwargs.get("source_role", "tool")
+        )
         memory_store_tool(session_id, key, str(value))
         return {"stored": True, "key": key}
 
-    async def _recall(**kwargs: Any) -> Dict[str, Any]:
+    async def _recall(**kwargs: Any) -> dict[str, Any]:
         key = kwargs["key"]
         redis_val = await REDIS_TEAM_MEMORY.recall(session_id, key)
         if redis_val is not None:
             return {"key": key, "value": redis_val, "found": True, "source": "redis"}
         return memory_recall_tool(session_id, key)
 
-    async def _search(**kwargs: Any) -> Dict[str, Any]:
+    async def _search(**kwargs: Any) -> dict[str, Any]:
         query = kwargs["query"]
         redis_hits = await REDIS_TEAM_MEMORY.search(session_id, query)
         if redis_hits:
             return {"query": query, "results": redis_hits, "source": "redis"}
         return memory_search_tool(session_id, query)
 
-    async def _persona_blend_preview(**kwargs: Any) -> Dict[str, Any]:
+    async def _persona_blend_preview(**kwargs: Any) -> dict[str, Any]:
         from ..engine import PersonaEngine
         from ..models import PersonaProfile
 
@@ -56,7 +59,7 @@ async def build_team_registry(
         blended = engine.blend_multiple(persona_objs, weights)
         return {"name": blended.name, "knobs": blended.get_knobs()}
 
-    async def _cyrex_status(**kwargs: Any) -> Dict[str, Any]:
+    async def _cyrex_status(**kwargs: Any) -> dict[str, Any]:
         from ..integrations.cyrex import CyrexClient
 
         client = CyrexClient()
@@ -65,7 +68,7 @@ async def build_team_registry(
         available = await client.is_available()
         return {"available": available, "configured": True}
 
-    async def _delegate_subtask(**kwargs: Any) -> Dict[str, Any]:
+    async def _delegate_subtask(**kwargs: Any) -> dict[str, Any]:
         from .task_queue import GLOBAL_TASK_QUEUE
 
         role = kwargs.get("role", "executor")
@@ -84,18 +87,45 @@ async def build_team_registry(
             "task_id": task.task_id,
         }
 
-    registry.register(ToolSpec("memory_store", "Persist key/value in team memory (Redis + local).", _store, tags=["memory"]))
-    registry.register(ToolSpec("memory_recall", "Recall from team memory.", _recall, tags=["memory"]))
+    registry.register(
+        ToolSpec(
+            "memory_store",
+            "Persist key/value in team memory (Redis + local).",
+            _store,
+            tags=["memory"],
+        )
+    )
+    registry.register(
+        ToolSpec("memory_recall", "Recall from team memory.", _recall, tags=["memory"])
+    )
     registry.register(ToolSpec("memory_search", "Search team memory.", _search, tags=["memory"]))
-    registry.register(ToolSpec("persona_blend_preview", "Blend persona knob profiles.", _persona_blend_preview, tags=["persona"]))
-    registry.register(ToolSpec("cyrex_status", "Check Cyrex runtime connectivity.", _cyrex_status, tags=["platform"]))
-    registry.register(ToolSpec("delegate_subtask", "Queue a subtask for another personality.", _delegate_subtask, tags=["workflow"]))
+    registry.register(
+        ToolSpec(
+            "persona_blend_preview",
+            "Blend persona knob profiles.",
+            _persona_blend_preview,
+            tags=["persona"],
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "cyrex_status", "Check Cyrex runtime connectivity.", _cyrex_status, tags=["platform"]
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "delegate_subtask",
+            "Queue a subtask for another personality.",
+            _delegate_subtask,
+            tags=["workflow"],
+        )
+    )
 
     if db is not None and agent_id is not None:
         tool_repo = AgentToolRepository(db)
 
-        def _make_agent_tool(name: str, cfg: dict) -> Callable[..., Awaitable[Dict[str, Any]]]:
-            async def _agent_tool(**kwargs: Any) -> Dict[str, Any]:
+        def _make_agent_tool(name: str, cfg: dict) -> Callable[..., Awaitable[dict[str, Any]]]:
+            async def _agent_tool(**kwargs: Any) -> dict[str, Any]:
                 return {"tool": name, "config": cfg, "input": kwargs, "status": "simulated"}
 
             return _agent_tool

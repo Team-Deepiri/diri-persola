@@ -17,9 +17,9 @@ from .models import AgentModel as AgentRow
 from .models import PersonaModel as PersonaRow
 
 warnings.warn(
-	"persola.db.tables is deprecated; import PersonaModel/AgentModel from persola.db.models",
-	DeprecationWarning,
-	stacklevel=2,
+    "persola.db.tables is deprecated; import PersonaModel/AgentModel from persola.db.models",
+    DeprecationWarning,
+    stacklevel=2,
 )
 
-__all__ = ["PersonaRow", "AgentRow"]
+__all__ = ["AgentRow", "PersonaRow"]

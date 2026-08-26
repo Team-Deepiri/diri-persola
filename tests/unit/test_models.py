@@ -9,10 +9,10 @@ from persola.models import (
     PersonaProfile,
 )
 
-
 # ---------------------------------------------------------------------------
 # PersonaProfile – knob field constraints
 # ---------------------------------------------------------------------------
+
 
 class TestPersonaProfileKnobs:
     def test_default_knobs_in_range(self):
@@ -44,6 +44,7 @@ class TestPersonaProfileKnobs:
 # PersonaProfile – text field constraints
 # ---------------------------------------------------------------------------
 
+
 class TestPersonaProfileTextFields:
     def test_name_max_200_rejected(self):
         with pytest.raises(ValidationError):
@@ -66,6 +67,7 @@ class TestPersonaProfileTextFields:
 # PersonaProfile – computed fields
 # ---------------------------------------------------------------------------
 
+
 class TestPersonaProfileComputedFields:
     def test_communication_style_reflects_knobs(self):
         p = PersonaProfile(name="P", creativity=0.9, humor=0.1)
@@ -86,6 +88,7 @@ class TestPersonaProfileComputedFields:
 # PersonaProfile – set_knobs
 # ---------------------------------------------------------------------------
 
+
 class TestPersonaProfileSetKnobs:
     def test_set_knobs_updates_fields(self):
         p = PersonaProfile(name="P")
@@ -102,6 +105,7 @@ class TestPersonaProfileSetKnobs:
 # ---------------------------------------------------------------------------
 # AgentConfig
 # ---------------------------------------------------------------------------
+
 
 class TestAgentConfig:
     def test_defaults(self):
@@ -127,6 +131,7 @@ class TestAgentConfig:
 # ---------------------------------------------------------------------------
 # AgentMemoryPolicy
 # ---------------------------------------------------------------------------
+
 
 class TestAgentMemoryPolicy:
     def test_history_window_zero_rejected(self):

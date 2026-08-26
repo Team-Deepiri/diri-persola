@@ -19,12 +19,12 @@ or, for a single production tick (e.g. driven by an API endpoint / cron):
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
-from .audit_log import AuditEventType, GLOBAL_AUDIT_LOG
+from .audit_log import GLOBAL_AUDIT_LOG, AuditEventType
 from .state import TeamSessionState
-from .task_queue import GLOBAL_TASK_QUEUE, AgentTask, TaskStatus
+from .task_queue import GLOBAL_TASK_QUEUE, AgentTask
 
 TeamFactory = Callable[[], "TeamOrchestrator"]  # noqa: F821 - forward ref, avoids circular import
 
@@ -32,14 +32,14 @@ TeamFactory = Callable[[], "TeamOrchestrator"]  # noqa: F821 - forward ref, avoi
 @dataclass
 class TickResult:
     claimed: bool
-    task: Optional[AgentTask] = None
-    error: Optional[str] = None
+    task: AgentTask | None = None
+    error: str | None = None
 
 
 class TaskQueueWorker:
     """Polls a team's task board and autonomously works queued items."""
 
-    def __init__(self, team_factory: TeamFactory, *, role: Optional[str] = None) -> None:
+    def __init__(self, team_factory: TeamFactory, *, role: str | None = None) -> None:
         self._team_factory = team_factory
         self._role = role  # if set, only claim tasks addressed to this role
         self._stop = asyncio.Event()
@@ -83,7 +83,9 @@ class TaskQueueWorker:
                 task_id=task.task_id,
                 session_id=task.session_id,
             )
-            return TickResult(claimed=True, task=GLOBAL_TASK_QUEUE.get(task.task_id), error=str(exc))
+            return TickResult(
+                claimed=True, task=GLOBAL_TASK_QUEUE.get(task.task_id), error=str(exc)
+            )
 
     async def run_forever(self, team_id: str = "default", *, poll_interval: float = 2.0) -> None:
         """Persistent loop, analogous to Alook's always-on local daemon."""

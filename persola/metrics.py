@@ -37,7 +37,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-
 # ---------------------------------------------------------------------------
 # Metric definitions
 # ---------------------------------------------------------------------------
@@ -202,6 +201,7 @@ def record_city_succession(count: int = 1) -> None:
 # Middleware
 # ---------------------------------------------------------------------------
 
+
 def _normalise_endpoint(path: str) -> str:
     """
     Replace path parameters with placeholders so high-cardinality IDs do not
@@ -246,6 +246,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 # ---------------------------------------------------------------------------
 # /metrics endpoint handler
 # ---------------------------------------------------------------------------
+
 
 async def metrics_endpoint(request: Request) -> Response:
     """Return Prometheus text exposition format."""

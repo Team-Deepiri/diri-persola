@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -33,9 +32,9 @@ async def _team_rate_limit(request: Request) -> None:
 
 class TeamInvokeRequest(BaseModel):
     task: str = Field(..., min_length=1)
-    session_id: Optional[str] = None
-    persona_id: Optional[str] = None
-    agent_id: Optional[str] = None
+    session_id: str | None = None
+    persona_id: str | None = None
+    agent_id: str | None = None
     use_langgraph: bool = True
 
 

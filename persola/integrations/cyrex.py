@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
 import os
+from typing import Any
 
 import httpx
 
@@ -182,10 +182,17 @@ class CyrexClient:
         persona_payload = {
             "id": str(pick("id", "cyrex_id", default=cyrex_id)),
             "name": str(pick("name", "title", "agent_name", default=defaults["name"])),
-            "description": str(pick("description", "bio", "summary", default=defaults["description"])),
+            "description": str(
+                pick("description", "bio", "summary", default=defaults["description"])
+            ),
             "model": str(pick("model", "llm_model", default=defaults["model"])),
-            "temperature": _coerce_float(pick("temperature", default=defaults["temperature"]), defaults["temperature"]),
-            "max_tokens": _coerce_int(pick("max_tokens", "max_output_tokens", default=defaults["max_tokens"]), defaults["max_tokens"]),
+            "temperature": _coerce_float(
+                pick("temperature", default=defaults["temperature"]), defaults["temperature"]
+            ),
+            "max_tokens": _coerce_int(
+                pick("max_tokens", "max_output_tokens", default=defaults["max_tokens"]),
+                defaults["max_tokens"],
+            ),
             "creativity": knob("creativity"),
             "humor": knob("humor"),
             "formality": knob("formality"),
@@ -216,4 +223,4 @@ class CyrexClient:
 HAS_CYREX = bool(os.getenv("CYREX_URL") and os.getenv("CYREX_API_KEY"))
 
 
-__all__ = ["CyrexClient", "HAS_CYREX"]
+__all__ = ["HAS_CYREX", "CyrexClient"]

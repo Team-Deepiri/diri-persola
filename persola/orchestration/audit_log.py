@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import uuid4
 
 
@@ -36,16 +36,16 @@ class AuditEventType(str, Enum):
 class AuditEvent:
     event_id: str = field(default_factory=lambda: str(uuid4()))
     team_id: str = "default"
-    session_id: Optional[str] = None
-    task_id: Optional[str] = None
+    session_id: str | None = None
+    task_id: str | None = None
     event_type: AuditEventType = AuditEventType.INSTRUCTION
     actor: str = "system"  # role or "user"
-    recipient: Optional[str] = None  # role this was addressed to, mirrors an email "To:"
+    recipient: str | None = None  # role this was addressed to, mirrors an email "To:"
     summary: str = ""
-    detail: Dict[str, Any] = field(default_factory=dict)
+    detail: dict[str, Any] = field(default_factory=dict)
     at: datetime = field(default_factory=_utcnow)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_id": self.event_id,
             "team_id": self.team_id,
@@ -62,7 +62,7 @@ class AuditEvent:
 
 class AuditLog:
     def __init__(self) -> None:
-        self._events: List[AuditEvent] = []
+        self._events: list[AuditEvent] = []
 
     def record(
         self,
@@ -71,10 +71,10 @@ class AuditLog:
         event_type: AuditEventType,
         actor: str,
         summary: str,
-        recipient: Optional[str] = None,
-        session_id: Optional[str] = None,
-        task_id: Optional[str] = None,
-        detail: Optional[Dict[str, Any]] = None,
+        recipient: str | None = None,
+        session_id: str | None = None,
+        task_id: str | None = None,
+        detail: dict[str, Any] | None = None,
     ) -> AuditEvent:
         event = AuditEvent(
             team_id=team_id,
@@ -93,10 +93,10 @@ class AuditLog:
         self,
         team_id: str,
         *,
-        session_id: Optional[str] = None,
-        task_id: Optional[str] = None,
+        session_id: str | None = None,
+        task_id: str | None = None,
         limit: int = 200,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         events = [e for e in self._events if e.team_id == team_id]
         if session_id is not None:
             events = [e for e in events if e.session_id == session_id]

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 from uuid import uuid4
 
 
@@ -44,15 +44,15 @@ class AgentTask:
     subtask: str = ""
     origin: str = "user"  # "user" | role that delegated it | "schedule"
     status: TaskStatus = TaskStatus.QUEUED
-    result: Optional[str] = None
-    error: Optional[str] = None
-    parent_task_id: Optional[str] = None
-    session_id: Optional[str] = None
+    result: str | None = None
+    error: str | None = None
+    parent_task_id: str | None = None
+    session_id: str | None = None
     created_at: datetime = field(default_factory=_utcnow)
-    claimed_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    claimed_at: datetime | None = None
+    completed_at: datetime | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "task_id": self.task_id,
             "team_id": self.team_id,
@@ -79,7 +79,7 @@ class AgentTaskQueue:
     """
 
     def __init__(self) -> None:
-        self._tasks: Dict[str, AgentTask] = {}
+        self._tasks: dict[str, AgentTask] = {}
 
     def enqueue(
         self,
@@ -88,8 +88,8 @@ class AgentTaskQueue:
         role: str,
         subtask: str,
         origin: str = "user",
-        parent_task_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        parent_task_id: str | None = None,
+        session_id: str | None = None,
     ) -> AgentTask:
         task = AgentTask(
             team_id=team_id,
@@ -102,7 +102,7 @@ class AgentTaskQueue:
         self._tasks[task.task_id] = task
         return task
 
-    def claim_next(self, *, team_id: str, role: Optional[str] = None) -> Optional[AgentTask]:
+    def claim_next(self, *, team_id: str, role: str | None = None) -> AgentTask | None:
         """Autonomous pickup: the next queued task for this team (optionally a specific role)."""
         for task in sorted(self._tasks.values(), key=lambda t: t.created_at):
             if task.team_id != team_id or task.status != TaskStatus.QUEUED:
@@ -114,20 +114,20 @@ class AgentTaskQueue:
             return task
         return None
 
-    def mark_in_progress(self, task_id: str) -> Optional[AgentTask]:
+    def mark_in_progress(self, task_id: str) -> AgentTask | None:
         task = self._tasks.get(task_id)
         if task:
             task.status = TaskStatus.IN_PROGRESS
         return task
 
-    def block(self, task_id: str, reason: str) -> Optional[AgentTask]:
+    def block(self, task_id: str, reason: str) -> AgentTask | None:
         task = self._tasks.get(task_id)
         if task:
             task.status = TaskStatus.BLOCKED
             task.error = reason
         return task
 
-    def complete(self, task_id: str, result: str) -> Optional[AgentTask]:
+    def complete(self, task_id: str, result: str) -> AgentTask | None:
         task = self._tasks.get(task_id)
         if task:
             task.status = TaskStatus.DONE
@@ -135,7 +135,7 @@ class AgentTaskQueue:
             task.completed_at = _utcnow()
         return task
 
-    def fail(self, task_id: str, error: str) -> Optional[AgentTask]:
+    def fail(self, task_id: str, error: str) -> AgentTask | None:
         task = self._tasks.get(task_id)
         if task:
             task.status = TaskStatus.FAILED
@@ -143,18 +143,18 @@ class AgentTaskQueue:
             task.completed_at = _utcnow()
         return task
 
-    def get(self, task_id: str) -> Optional[AgentTask]:
+    def get(self, task_id: str) -> AgentTask | None:
         return self._tasks.get(task_id)
 
-    def board(self, team_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    def board(self, team_id: str) -> dict[str, list[dict[str, Any]]]:
         """Kanban view: tasks grouped by column, newest first within each column."""
-        columns: Dict[str, List[Dict[str, Any]]] = {s.value: [] for s in TaskStatus}
+        columns: dict[str, list[dict[str, Any]]] = {s.value: [] for s in TaskStatus}
         for task in sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True):
             if task.team_id == team_id:
                 columns[task.status.value].append(task.to_dict())
         return columns
 
-    def children(self, parent_task_id: str) -> List[AgentTask]:
+    def children(self, parent_task_id: str) -> list[AgentTask]:
         return [t for t in self._tasks.values() if t.parent_task_id == parent_task_id]
 
 

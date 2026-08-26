@@ -8,13 +8,11 @@ Complements ``teams.py`` (synchronous /invoke) with the async path.
 
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..integrations.llm import get_llm_provider
-from ..orchestration.audit_log import AuditEventType, GLOBAL_AUDIT_LOG
+from ..orchestration.audit_log import GLOBAL_AUDIT_LOG, AuditEventType
 from ..orchestration.daemon import TaskQueueWorker
 from ..orchestration.org_chart import GLOBAL_ORG_CHART, OrgNode
 from ..orchestration.task_queue import GLOBAL_TASK_QUEUE
@@ -25,6 +23,7 @@ router = APIRouter(prefix="/api/v1/workqueue", tags=["workqueue"])
 
 # ---------------------------------------------------------------- org chart
 
+
 @router.get("/org-chart")
 async def get_org_chart(team_id: str = "default"):
     return GLOBAL_ORG_CHART.to_dict(team_id)
@@ -33,8 +32,8 @@ async def get_org_chart(team_id: str = "default"):
 class OrgNodeRequest(BaseModel):
     role: str
     title: str
-    reports_to: Optional[str] = None
-    email: Optional[str] = None
+    reports_to: str | None = None
+    email: str | None = None
 
 
 @router.put("/org-chart/nodes")
@@ -54,11 +53,12 @@ async def deactivate_org_node(role: str, team_id: str = "default"):
 
 # --------------------------------------------------------------- task board
 
+
 class EnqueueTaskRequest(BaseModel):
     subtask: str = Field(..., min_length=1)
-    role: Optional[str] = None  # default: top of org chart, mirrors "assign to the CEO's inbox"
+    role: str | None = None  # default: top of org chart, mirrors "assign to the CEO's inbox"
     origin: str = "user"
-    session_id: Optional[str] = None
+    session_id: str | None = None
 
 
 @router.post("/tasks")
@@ -118,17 +118,20 @@ async def tick_single_task(task_id: str, team_id: str = "default"):
     worker = TaskQueueWorker(team_factory=lambda: TeamOrchestrator(llm_fn=llm_fn), role=task.role)
     result = await worker.tick(team_id)
     if result.task is None:
-        raise HTTPException(status_code=409, detail="Task was claimed by another worker before this tick")
+        raise HTTPException(
+            status_code=409, detail="Task was claimed by another worker before this tick"
+        )
     return result.task.to_dict()
 
 
 # ---------------------------------------------------------------- audit log
 
+
 @router.get("/audit")
 async def get_audit_trail(
     team_id: str = "default",
-    session_id: Optional[str] = None,
-    task_id: Optional[str] = None,
+    session_id: str | None = None,
+    task_id: str | None = None,
     limit: int = 200,
 ):
     return GLOBAL_AUDIT_LOG.timeline(team_id, session_id=session_id, task_id=task_id, limit=limit)

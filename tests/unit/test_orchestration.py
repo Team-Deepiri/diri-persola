@@ -8,7 +8,7 @@ from persola.orchestration.memory import GLOBAL_MEMORY, MemoryStore
 from persola.orchestration.personalities import PersonalityRole
 from persola.orchestration.router import route_task, select_delegation_plan
 from persola.orchestration.team import TeamOrchestrator
-from persola.orchestration.tools import ToolRegistry, build_default_registry
+from persola.orchestration.tools import build_default_registry
 
 
 @pytest.fixture(autouse=True)

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from rich.console import Console
 from rich.table import Table
-
 
 console = Console()
 
@@ -66,7 +66,9 @@ def print_status_table(health: dict[str, Any], providers: dict[str, Any]) -> Non
     table.add_column("Status")
     table.add_column("Details")
     table.add_row("API", str(health.get("status", "unknown")), "Server health endpoint reachable")
-    table.add_row("Database", "healthy" if health.get("database") else "degraded", str(health.get("database")))
+    table.add_row(
+        "Database", "healthy" if health.get("database") else "degraded", str(health.get("database"))
+    )
     for provider in providers.get("providers", []):
         table.add_row(
             f"LLM:{provider.get('type', 'unknown')}",
@@ -84,5 +86,8 @@ def print_single_resource(title: str, data: dict[str, Any], *, as_json: bool) ->
     table.add_column("Field")
     table.add_column("Value", overflow="fold")
     for key, value in data.items():
-        table.add_row(str(key), json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value))
+        table.add_row(
+            str(key),
+            json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value),
+        )
     console.print(table)

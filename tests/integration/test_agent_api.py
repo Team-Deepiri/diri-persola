@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 pytestmark = pytest.mark.anyio
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 async def _create_agent(client, payload: dict) -> dict:
     r = await client.post("/api/v1/agents", json=payload)
@@ -28,6 +28,7 @@ async def _create_persona(client, name: str = "Persona") -> dict:
 # Create
 # ---------------------------------------------------------------------------
 
+
 class TestCreateAgent:
     async def test_create_returns_200(self, http_client, agent_payload):
         r = await http_client.post("/api/v1/agents", json=agent_payload)
@@ -39,7 +40,7 @@ class TestCreateAgent:
 
     async def test_create_returns_agent_id(self, http_client, agent_payload):
         body = await _create_agent(http_client, agent_payload)
-        assert "agent_id" in body and body["agent_id"]
+        assert body.get("agent_id")
 
     async def test_create_with_persona_id(self, http_client, agent_payload):
         persona = await _create_persona(http_client)
@@ -55,6 +56,7 @@ class TestCreateAgent:
 # ---------------------------------------------------------------------------
 # List
 # ---------------------------------------------------------------------------
+
 
 class TestListAgents:
     async def test_empty_list(self, http_client):
@@ -73,6 +75,7 @@ class TestListAgents:
 # Get
 # ---------------------------------------------------------------------------
 
+
 class TestGetAgent:
     async def test_get_existing_returns_200(self, http_client, agent_payload):
         created = await _create_agent(http_client, agent_payload)
@@ -81,6 +84,7 @@ class TestGetAgent:
 
     async def test_get_nonexistent_returns_404(self, http_client):
         import uuid
+
         r = await http_client.get(f"/api/v1/agents/{uuid.uuid4()}")
         assert r.status_code == 404
 
@@ -88,6 +92,7 @@ class TestGetAgent:
 # ---------------------------------------------------------------------------
 # Update
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateAgent:
     async def test_update_name_returns_200(self, http_client, agent_payload):
@@ -101,6 +106,7 @@ class TestUpdateAgent:
 # ---------------------------------------------------------------------------
 # Delete
 # ---------------------------------------------------------------------------
+
 
 class TestDeleteAgent:
     async def test_delete_returns_204(self, http_client, agent_payload):
@@ -119,12 +125,14 @@ class TestDeleteAgent:
 # Invoke – HAS_CYREX=False path (no LLM required)
 # ---------------------------------------------------------------------------
 
+
 class TestInvokeAgent:
     async def test_invoke_without_cyrex_returns_200(self, http_client, agent_payload):
         """When HAS_CYREX is False the handler returns a degraded 200 response."""
         created = await _create_agent(http_client, agent_payload)
 
         import persola.api.main as api_module
+
         with patch.object(api_module, "HAS_CYREX", False):
             r = await http_client.post(
                 f"/api/v1/agents/{created['agent_id']}/invoke",
@@ -136,6 +144,7 @@ class TestInvokeAgent:
         created = await _create_agent(http_client, agent_payload)
 
         import persola.api.main as api_module
+
         with patch.object(api_module, "HAS_CYREX", False):
             r = await http_client.post(
                 f"/api/v1/agents/{created['agent_id']}/invoke",
@@ -145,6 +154,7 @@ class TestInvokeAgent:
 
     async def test_invoke_nonexistent_agent_returns_404(self, http_client):
         import uuid
+
         r = await http_client.post(
             f"/api/v1/agents/{uuid.uuid4()}/invoke",
             json={"message": "Hi"},
@@ -161,6 +171,7 @@ class TestInvokeAgent:
         mock_llm.get_provider_type = MagicMock(return_value="mock")
 
         import persola.api.main as api_module
+
         with (
             patch.object(api_module, "HAS_CYREX", True),
             patch.object(api_module, "get_llm_provider", return_value=mock_llm),

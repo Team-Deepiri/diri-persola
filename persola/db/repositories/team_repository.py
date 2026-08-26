@@ -7,7 +7,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..models import TeamMemoryModel, TeamSessionModel, TeamWorkflowModel, TeamWorkflowStepModel, TeamWorkflowStatus
+from ..models import (
+    TeamMemoryModel,
+    TeamSessionModel,
+    TeamWorkflowModel,
+    TeamWorkflowStatus,
+    TeamWorkflowStepModel,
+)
 from .base import BaseRepository
 
 
@@ -16,7 +22,9 @@ class TeamSessionRepository(BaseRepository[TeamSessionModel]):
         super().__init__(session, TeamSessionModel)
 
     async def get_by_external_id(self, external_session_id: str) -> TeamSessionModel | None:
-        query = select(TeamSessionModel).where(TeamSessionModel.external_session_id == external_session_id)
+        query = select(TeamSessionModel).where(
+            TeamSessionModel.external_session_id == external_session_id
+        )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
@@ -46,7 +54,9 @@ class TeamWorkflowRepository(BaseRepository[TeamWorkflowModel]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, TeamWorkflowModel)
 
-    async def list_for_session(self, team_session_id: UUID, limit: int = 20) -> list[TeamWorkflowModel]:
+    async def list_for_session(
+        self, team_session_id: UUID, limit: int = 20
+    ) -> list[TeamWorkflowModel]:
         query = (
             select(TeamWorkflowModel)
             .where(TeamWorkflowModel.team_session_id == team_session_id)
@@ -93,7 +103,9 @@ class TeamMemoryRepository(BaseRepository[TeamMemoryModel]):
     def __init__(self, session: AsyncSession) -> None:
         super().__init__(session, TeamMemoryModel)
 
-    async def list_for_session(self, team_session_id: UUID, limit: int = 100) -> list[TeamMemoryModel]:
+    async def list_for_session(
+        self, team_session_id: UUID, limit: int = 100
+    ) -> list[TeamMemoryModel]:
         query = (
             select(TeamMemoryModel)
             .where(TeamMemoryModel.team_session_id == team_session_id)

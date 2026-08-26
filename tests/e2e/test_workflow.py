@@ -13,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 pytestmark = pytest.mark.anyio
 
 
@@ -66,6 +65,7 @@ class TestFullWorkflow:
         mock_llm.get_provider_type = MagicMock(return_value="mock")
 
         import persola.api.main as api_module
+
         with (
             patch.object(api_module, "HAS_CYREX", True),
             patch.object(api_module, "get_llm_provider", return_value=mock_llm),
@@ -94,7 +94,7 @@ class TestFullWorkflow:
         assert session["session_id"] == "e2e-session"
 
         # ── 5. Verify message history is persisted ────────────────────────
-        messages_r = await http_client.get(f"/api/v1/sessions/e2e-session/messages")
+        messages_r = await http_client.get("/api/v1/sessions/e2e-session/messages")
         assert messages_r.status_code == 200
         messages = messages_r.json()
 

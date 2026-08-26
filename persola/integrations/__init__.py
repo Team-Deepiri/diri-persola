@@ -1,4 +1,4 @@
-from .cyrex import CyrexClient, HAS_CYREX
+from .cyrex import HAS_CYREX, CyrexClient
 from .llm import PersolaLLM, get_llm_provider
 
-__all__ = ["PersolaLLM", "get_llm_provider", "CyrexClient", "HAS_CYREX"]
+__all__ = ["HAS_CYREX", "CyrexClient", "PersolaLLM", "get_llm_provider"]

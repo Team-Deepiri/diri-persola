@@ -4,13 +4,13 @@ from unittest.mock import patch
 
 import pytest
 
-
 pytestmark = pytest.mark.anyio
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 async def _create_agent(client, name: str = "Agent") -> dict:
     r = await client.post("/api/v1/agents", json={"name": name, "model": "llama3:8b"})
@@ -34,6 +34,7 @@ async def _invoke(client, agent_id: str, message: str, session_id: str | None = 
 # ---------------------------------------------------------------------------
 # Sessions
 # ---------------------------------------------------------------------------
+
 
 class TestAgentSessions:
     async def test_list_sessions_empty_on_fresh_agent(self, http_client):
@@ -75,6 +76,7 @@ class TestAgentSessions:
 # ---------------------------------------------------------------------------
 # Messages
 # ---------------------------------------------------------------------------
+
 
 class TestSessionMessages:
     async def _setup_session(self, client, messages: list[str]) -> tuple[dict, str]:

@@ -12,7 +12,9 @@ class PersonaVersionRepository(BaseRepository[PersonaVersionModel]):
         super().__init__(session, PersonaVersionModel)
 
     async def get_latest_version_number(self, persona_id) -> int:
-        query = select(func.max(PersonaVersionModel.version_number)).where(PersonaVersionModel.persona_id == persona_id)
+        query = select(func.max(PersonaVersionModel.version_number)).where(
+            PersonaVersionModel.persona_id == persona_id
+        )
         result = await self.session.execute(query)
         latest = result.scalar_one_or_none()
         return int(latest or 0)

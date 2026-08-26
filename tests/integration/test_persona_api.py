@@ -2,13 +2,13 @@
 
 import pytest
 
-
 pytestmark = pytest.mark.anyio
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 async def _create_persona(client, payload: dict) -> dict:
     r = await client.post("/api/v1/personas", json=payload)
@@ -19,6 +19,7 @@ async def _create_persona(client, payload: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Create
 # ---------------------------------------------------------------------------
+
 
 class TestCreatePersona:
     async def test_create_returns_200(self, http_client, persona_payload):
@@ -31,7 +32,7 @@ class TestCreatePersona:
 
     async def test_create_response_contains_id(self, http_client, persona_payload):
         body = await _create_persona(http_client, persona_payload)
-        assert "id" in body and body["id"]
+        assert body.get("id")
 
     async def test_create_returns_knob_values(self, http_client, persona_payload):
         body = await _create_persona(http_client, persona_payload)
@@ -50,6 +51,7 @@ class TestCreatePersona:
 # Read
 # ---------------------------------------------------------------------------
 
+
 class TestGetPersona:
     async def test_get_existing_returns_200(self, http_client, persona_payload):
         created = await _create_persona(http_client, persona_payload)
@@ -63,6 +65,7 @@ class TestGetPersona:
 
     async def test_get_nonexistent_returns_404(self, http_client):
         import uuid
+
         r = await http_client.get(f"/api/v1/personas/{uuid.uuid4()}")
         assert r.status_code == 404
 
@@ -70,6 +73,7 @@ class TestGetPersona:
 # ---------------------------------------------------------------------------
 # List
 # ---------------------------------------------------------------------------
+
 
 class TestListPersonas:
     async def test_empty_list_returns_200(self, http_client):
@@ -94,6 +98,7 @@ class TestListPersonas:
 # Update
 # ---------------------------------------------------------------------------
 
+
 class TestUpdatePersona:
     async def test_update_returns_200(self, http_client, persona_payload):
         created = await _create_persona(http_client, persona_payload)
@@ -109,6 +114,7 @@ class TestUpdatePersona:
 
     async def test_update_nonexistent_returns_404(self, http_client, persona_payload):
         import uuid
+
         r = await http_client.put(
             f"/api/v1/personas/{uuid.uuid4()}",
             json={**persona_payload, "id": str(uuid.uuid4())},
@@ -119,6 +125,7 @@ class TestUpdatePersona:
 # ---------------------------------------------------------------------------
 # Delete
 # ---------------------------------------------------------------------------
+
 
 class TestDeletePersona:
     async def test_delete_returns_200(self, http_client, persona_payload):
@@ -135,6 +142,7 @@ class TestDeletePersona:
 
     async def test_delete_nonexistent_returns_404(self, http_client):
         import uuid
+
         r = await http_client.delete(f"/api/v1/personas/{uuid.uuid4()}")
         assert r.status_code == 404
 
@@ -142,6 +150,7 @@ class TestDeletePersona:
 # ---------------------------------------------------------------------------
 # Blend
 # ---------------------------------------------------------------------------
+
 
 class TestBlendPersonas:
     async def test_blend_returns_200(self, http_client):
@@ -164,6 +173,7 @@ class TestBlendPersonas:
 
     async def test_blend_missing_persona_returns_404(self, http_client, persona_payload):
         import uuid
+
         p1 = await _create_persona(http_client, persona_payload)
         r = await http_client.post(
             "/api/v1/personas/blend",

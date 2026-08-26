@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
-
 from .personalities import BUILTIN_ARCHETYPES, PersonalityArchetype, PersonalityRole
 
 
@@ -24,8 +22,8 @@ def score_task_for_personality(task: str, archetype: PersonalityArchetype) -> fl
     return min(1.0, base + role_floor)
 
 
-def route_task(task: str, top_k: int = 3) -> List[Tuple[PersonalityRole, float]]:
-    scores: List[Tuple[PersonalityRole, float]] = []
+def route_task(task: str, top_k: int = 3) -> list[tuple[PersonalityRole, float]]:
+    scores: list[tuple[PersonalityRole, float]] = []
     for role, archetype in BUILTIN_ARCHETYPES.items():
         if role == PersonalityRole.COORDINATOR:
             continue
@@ -34,7 +32,7 @@ def route_task(task: str, top_k: int = 3) -> List[Tuple[PersonalityRole, float]]
     return scores[:top_k]
 
 
-def select_delegation_plan(task: str) -> Dict[str, object]:
+def select_delegation_plan(task: str) -> dict[str, object]:
     ranked = route_task(task, top_k=3)
     specialists = [role.value for role, score in ranked if score > 0.12]
     if not specialists:

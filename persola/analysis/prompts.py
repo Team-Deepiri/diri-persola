@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from ..models import KNOB_DEFINITIONS
 
-
 ANALYSIS_PROMPT_INTRO = """You are analyzing a writing sample to infer the author's communication and reasoning style.
 Return only valid JSON. Do not include markdown, explanations, or code fences.
 
@@ -24,10 +23,7 @@ Every knob value must be a number between 0.0 and 1.0.
 
 
 def _build_expected_shape() -> str:
-    knob_lines = "\n".join(
-        f'- "{knob.key}": {knob.description}'
-        for knob in KNOB_DEFINITIONS
-    )
+    knob_lines = "\n".join(f'- "{knob.key}": {knob.description}' for knob in KNOB_DEFINITIONS)
     return (
         "Return a JSON object with this shape:\n"
         "{\n"

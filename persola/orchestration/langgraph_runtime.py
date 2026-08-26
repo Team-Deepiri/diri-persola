@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional, TypedDict
+from collections.abc import Awaitable, Callable
+from typing import Any, TypedDict
 
 LLMFn = Callable[[str, str], Awaitable[str]]
 
 
 class TeamGraphState(TypedDict, total=False):
     task: str
-    specialists: List[str]
-    specialist_outputs: Dict[str, str]
+    specialists: list[str]
+    specialist_outputs: dict[str, str]
     coordinator_output: str
-    tool_results: List[Dict[str, Any]]
+    tool_results: list[dict[str, Any]]
 
 
 def langgraph_available() -> bool:
@@ -26,20 +27,22 @@ def langgraph_available() -> bool:
 
 async def run_langgraph_team(
     task: str,
-    specialists: List[str],
+    specialists: list[str],
     llm_fn: LLMFn,
     system_prompt_for_role: Callable[[str], str],
-    tool_runner: Optional[Callable[[str, str], Awaitable[List[Dict[str, Any]]]]] = None,
+    tool_runner: Callable[[str, str], Awaitable[list[dict[str, Any]]]] | None = None,
 ) -> TeamGraphState:
     """Execute specialist nodes in parallel, then coordinator synthesis via LangGraph."""
     if not langgraph_available():
-        return await _fallback_parallel_team(task, specialists, llm_fn, system_prompt_for_role, tool_runner)
+        return await _fallback_parallel_team(
+            task, specialists, llm_fn, system_prompt_for_role, tool_runner
+        )
 
     from langgraph.graph import END, StateGraph
 
     async def specialists_node(state: TeamGraphState) -> TeamGraphState:
-        outputs: Dict[str, str] = {}
-        tool_results: List[Dict[str, Any]] = []
+        outputs: dict[str, str] = {}
+        tool_results: list[dict[str, Any]] = []
 
         async def _run_role(role: str) -> None:
             system = system_prompt_for_role(role)
@@ -74,22 +77,27 @@ async def run_langgraph_team(
     graph.add_edge("coordinator", END)
     app = graph.compile()
 
-    initial: TeamGraphState = {"task": task, "specialists": specialists, "specialist_outputs": {}, "tool_results": []}
+    initial: TeamGraphState = {
+        "task": task,
+        "specialists": specialists,
+        "specialist_outputs": {},
+        "tool_results": [],
+    }
     final = await app.ainvoke(initial)
     return final
 
 
 async def _fallback_parallel_team(
     task: str,
-    specialists: List[str],
+    specialists: list[str],
     llm_fn: LLMFn,
     system_prompt_for_role: Callable[[str], str],
-    tool_runner: Optional[Callable[[str, str], Awaitable[List[Dict[str, Any]]]]],
+    tool_runner: Callable[[str, str], Awaitable[list[dict[str, Any]]]] | None,
 ) -> TeamGraphState:
     import asyncio
 
-    outputs: Dict[str, str] = {}
-    tool_results: List[Dict[str, Any]] = []
+    outputs: dict[str, str] = {}
+    tool_results: list[dict[str, Any]] = []
 
     async def _run(role: str) -> None:
         outputs[role] = await llm_fn(

@@ -1,8 +1,12 @@
+import os
+import re
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 from uuid import UUID
-import re
 
+import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,11 +16,6 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, List, Optional
-import uuid
-import os
-from pathlib import Path
-import structlog
 
 from ..cache import TokenBucketRateLimiter
 
@@ -41,16 +40,19 @@ async def _invoke_rate_limit(request: Request) -> None:
             headers={"Retry-After": str(retry_after), "X-RateLimit-Remaining": "0"},
         )
 
+
 from ..analysis import StyleToKnobMapper, WritingStyleExtractor
-from ..models import (
-    AgentConfig,
-    DEFAULT_PRESETS,
-    KNOB_DEFINITIONS,
-    PersonaProfile,
-    PresetName,
-)
+from ..auth import APIKeyAuth
 from ..db.database import check_db_health, close_db, get_db, init_db
-from ..db.models import AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel, SessionModel
+from ..db.models import (
+    AgentModel,
+    AgentRunModel,
+    AgentToolModel,
+    AnalysisRunModel,
+    PersonaModel,
+    PersonaVersionModel,
+    SessionModel,
+)
 from ..db.repositories import (
     AgentRepository,
     AgentRunRepository,
@@ -62,7 +64,10 @@ from ..db.repositories import (
     SessionRepository,
 )
 from ..db.services import PersonaService
-from ..auth import APIKeyAuth
+from ..engine import PersonaEngine
+from ..integrations.cyrex import CyrexClient
+from ..integrations.llm import HAS_CYREX, get_llm_provider
+from ..logging import configure_logging
 from ..metrics import (
     MetricsMiddleware,
     metrics_endpoint,
@@ -70,18 +75,22 @@ from ..metrics import (
     set_agents_total,
     set_personas_total,
 )
-from ..engine import PersonaEngine
-from ..integrations.llm import get_llm_provider, HAS_CYREX
-from ..integrations.cyrex import CyrexClient
-from ..logging import configure_logging
+from ..models import (
+    DEFAULT_PRESETS,
+    KNOB_DEFINITIONS,
+    AgentConfig,
+    PersonaProfile,
+    PresetName,
+)
 
 configure_logging()
 log = structlog.get_logger("persola.api")
 
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Startup: init DB, seed presets. Shutdown: dispose connection pool."""
-    
+
     log.info("db.init")
     await init_db()
     log.info("db.ready")
@@ -97,6 +106,7 @@ async def lifespan(application: FastAPI):
 
     log.info("db.shutdown")
     await close_db()
+
 
 app = FastAPI(
     title="Persola API",
@@ -118,8 +128,8 @@ app.add_middleware(
 )
 
 from .city import router as city_router
-from .teams import router as teams_router
 from .settings import router as settings_router
+from .teams import router as teams_router
 from .workqueue import router as workqueue_router
 
 app.include_router(teams_router)
@@ -234,12 +244,15 @@ async def health(db: AsyncSession = Depends(get_db)):
 
 @app.get("/health/db")
 async def health_db(db: AsyncSession = Depends(get_db)):
-    """Check database connectivity."""
+    """Check database connectivity and pool health."""
+    from ..db.database import pool_status
+
     try:
         from sqlalchemy import text
+
         result = await db.execute(text("SELECT 1"))
         result.scalar()
-        return {"status": "healthy", "database": "connected"}
+        return {"status": "healthy", "database": "connected", **pool_status()}
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database unreachable: {e}")
 
@@ -260,12 +273,12 @@ async def get_knobs(db: AsyncSession = Depends(get_db)):
             }
             for knob in KNOB_DEFINITIONS
         ],
-        "panels": ["Creativity", "Personality", "Thinking", "Reliability"]
+        "panels": ["Creativity", "Personality", "Thinking", "Reliability"],
     }
 
 
 @app.post("/api/v1/tuning/validate")
-async def validate_knobs(knobs: Dict[str, float], db: AsyncSession = Depends(get_db)):
+async def validate_knobs(knobs: dict[str, float], db: AsyncSession = Depends(get_db)):
     return engine.validate_knobs(knobs)
 
 
@@ -281,7 +294,7 @@ class AnalysisCreateRequest(BaseModel):
 
 
 class AnalysisExtractResponse(BaseModel):
-    knobs: Dict[str, float]
+    knobs: dict[str, float]
     confidence: float
     notes: str
     persona_id: str | None = None
@@ -298,7 +311,9 @@ async def _run_style_analysis(text: str) -> tuple[dict[str, float], float, str]:
 
 @app.post("/api/v1/analysis/extract", response_model=AnalysisExtractResponse)
 @limiter.limit("10/minute")
-async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
+async def extract_analysis(
+    request: Request, body: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)
+):
     knobs, confidence, notes = await _run_style_analysis(body.text)
     persona_id: str | None = None
     persona_uuid: UUID | None = None
@@ -308,7 +323,9 @@ async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: A
         repo = PersonaRepository(db)
         persona = _build_persona_from_knobs(persona_name, knobs, notes)
         created = await repo.create(_to_persona_model(persona))
-        await _record_persona_version(db, created, source="analysis", summary="Persona created from writing analysis")
+        await _record_persona_version(
+            db, created, source="analysis", summary="Persona created from writing analysis"
+        )
         persona_uuid = created.id
         persona_id = str(created.id)
 
@@ -331,12 +348,16 @@ async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: A
 
 
 @app.post("/api/v1/analysis/extract-and-create", response_model=PersonaProfile)
-async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSession = Depends(get_db)):
+async def extract_and_create_persona(
+    request: AnalysisCreateRequest, db: AsyncSession = Depends(get_db)
+):
     knobs, confidence, notes = await _run_style_analysis(request.text)
     repo = PersonaRepository(db)
     persona = _build_persona_from_knobs(request.name, knobs, notes)
     created = await repo.create(_to_persona_model(persona))
-    await _record_persona_version(db, created, source="analysis", summary="Persona created from writing analysis")
+    await _record_persona_version(
+        db, created, source="analysis", summary="Persona created from writing analysis"
+    )
     await _record_analysis_run(
         db,
         text=request.text,
@@ -361,12 +382,7 @@ async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get
         persona.id = f"persona_{uuid.uuid4().hex[:8]}"
 
     created = await repo.create(_to_persona_model(persona))
-    await _record_persona_version(
-        db,
-        created,
-        source="manual",
-        summary="Persona created"
-    )
+    await _record_persona_version(db, created, source="manual", summary="Persona created")
 
     await db.commit()
     log.info("persona.created", persona_id=str(created.id), name=created.name)
@@ -375,14 +391,14 @@ async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get
     return _to_persona_profile(created)
 
 
-@app.get("/api/v1/personas", response_model=List[PersonaProfile])
+@app.get("/api/v1/personas", response_model=list[PersonaProfile])
 async def list_personas(db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
     personas = await repo.list(limit=1000)
     return [_to_persona_profile(item) for item in personas]
 
 
-@app.get("/api/v1/personas/search", response_model=List[PersonaProfile])
+@app.get("/api/v1/personas/search", response_model=list[PersonaProfile])
 async def search_personas(q: str, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
     personas = await repo.search(q)
@@ -410,7 +426,9 @@ async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/v1/personas/{persona_id}/clone", response_model=PersonaProfile)
-async def clone_persona(persona_id: str, request: ClonePersonaRequest, db: AsyncSession = Depends(get_db)):
+async def clone_persona(
+    persona_id: str, request: ClonePersonaRequest, db: AsyncSession = Depends(get_db)
+):
     repo = PersonaRepository(db)
     try:
         cloned = await repo.clone(UUID(persona_id), request.name)
@@ -423,7 +441,9 @@ async def clone_persona(persona_id: str, request: ClonePersonaRequest, db: Async
 
 
 @app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
-async def update_persona(persona_id: str, persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
+async def update_persona(
+    persona_id: str, persona: PersonaProfile, db: AsyncSession = Depends(get_db)
+):
     service = PersonaService(db)
     updates = {
         "name": persona.name,
@@ -483,25 +503,27 @@ class BlendRequest(BaseModel):
     persona1_id: str = None
     persona2_id: str = None
     ratio: float = 0.5
-    persona_ids: List[str] = None
-    weights: List[float] = None
+    persona_ids: list[str] = None
+    weights: list[float] = None
     name: str = None
     description: str = None
 
 
 class BlendPreviewRequest(BaseModel):
-    persona_ids: List[str]
-    weights: List[float]
+    persona_ids: list[str]
+    weights: list[float]
 
 
 @app.post("/api/v1/personas/blend/preview", response_model=PersonaProfile)
 async def preview_blend(request: BlendPreviewRequest, db: AsyncSession = Depends(get_db)):
     """Preview a blend without saving to DB."""
     repo = PersonaRepository(db)
-    
+
     if len(request.persona_ids) != len(request.weights):
-        raise HTTPException(status_code=400, detail="Number of persona_ids must equal number of weights")
-    
+        raise HTTPException(
+            status_code=400, detail="Number of persona_ids must equal number of weights"
+        )
+
     # Fetch all personas
     personas = []
     for persona_id in request.persona_ids:
@@ -509,25 +531,27 @@ async def preview_blend(request: BlendPreviewRequest, db: AsyncSession = Depends
         if persona is None:
             raise HTTPException(status_code=404, detail=f"Persona {persona_id} not found")
         personas.append(_to_persona_profile(persona))
-    
+
     # Blend without saving
     try:
         blended = engine.blend_multiple(personas, request.weights)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
+
     return blended
 
 
 @app.post("/api/v1/personas/blend", response_model=PersonaProfile)
 async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_db)):
     repo = PersonaRepository(db)
-    
+
     # Handle new multi-persona format
     if request.persona_ids is not None:
         if len(request.persona_ids) != len(request.weights or []):
-            raise HTTPException(status_code=400, detail="Number of persona_ids must equal number of weights")
-        
+            raise HTTPException(
+                status_code=400, detail="Number of persona_ids must equal number of weights"
+            )
+
         # Fetch all personas
         personas = []
         for persona_id in request.persona_ids:
@@ -535,31 +559,34 @@ async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_d
             if persona is None:
                 raise HTTPException(status_code=404, detail=f"Persona {persona_id} not found")
             personas.append(_to_persona_profile(persona))
-        
+
         # Blend multiple personas
         try:
             blended = engine.blend_multiple(personas, request.weights)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
-        
+
         # Use provided name or auto-generated name
         if request.name:
             blended.name = request.name
-        
+
         # Use provided description or auto-generated description
         if request.description:
             blended.description = request.description
-        
+
         created = await repo.create(_to_persona_model(blended))
         summary = f"Multi-persona blend with weights {request.weights}"
         await _record_persona_version(db, created, source="blend", summary=summary)
         await db.commit()
         return _to_persona_profile(created)
-    
+
     # Handle old 2-persona format (backward compatibility)
     if request.persona1_id is None or request.persona2_id is None:
-        raise HTTPException(status_code=400, detail="Either (persona1_id, persona2_id, ratio) or (persona_ids, weights) must be provided")
-    
+        raise HTTPException(
+            status_code=400,
+            detail="Either (persona1_id, persona2_id, ratio) or (persona_ids, weights) must be provided",
+        )
+
     persona1 = await repo.get(UUID(request.persona1_id))
     persona2 = await repo.get(UUID(request.persona2_id))
 
@@ -569,12 +596,12 @@ async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_d
         raise HTTPException(status_code=404, detail="Persona 2 not found")
 
     blended = engine.blend_personas(
-        _to_persona_profile(persona1),
-        _to_persona_profile(persona2),
-        request.ratio
+        _to_persona_profile(persona1), _to_persona_profile(persona2), request.ratio
     )
     created = await repo.create(_to_persona_model(blended))
-    await _record_persona_version(db, created, source="blend", summary=f"Blend ratio {request.ratio:.2f}")
+    await _record_persona_version(
+        db, created, source="blend", summary=f"Blend ratio {request.ratio:.2f}"
+    )
     await db.commit()
     return _to_persona_profile(created)
 
@@ -629,7 +656,9 @@ class ApplyPresetRequest(BaseModel):
 
 
 @app.post("/api/v1/presets/{preset}/apply")
-async def apply_preset(preset: PresetName, request: ApplyPresetRequest, db: AsyncSession = Depends(get_db)):
+async def apply_preset(
+    preset: PresetName, request: ApplyPresetRequest, db: AsyncSession = Depends(get_db)
+):
     service = PersonaService(db)
     existing = await service.get(UUID(request.persona_id))
     if existing is None:
@@ -645,7 +674,9 @@ async def apply_preset(preset: PresetName, request: ApplyPresetRequest, db: Asyn
     updated = await service.update(existing.id, updates)
     if updated is None:
         raise HTTPException(status_code=404, detail="Persona not found")
-    await _record_persona_version(db, updated, source="preset", summary=f"Applied preset {preset.value}")
+    await _record_persona_version(
+        db, updated, source="preset", summary=f"Applied preset {preset.value}"
+    )
     await db.commit()
     return _to_persona_profile(updated)
 
@@ -674,10 +705,10 @@ async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
     # Return API-friendly config
     agents = await agent_repo.count()
     set_agents_total(agents)
-    return _to_agent_config(created)  
+    return _to_agent_config(created)
 
 
-@app.get("/api/v1/agents", response_model=List[AgentConfig])
+@app.get("/api/v1/agents", response_model=list[AgentConfig])
 async def list_agents(db: AsyncSession = Depends(get_db)):
     repo = AgentRepository(db)
     agents = await repo.list(limit=1000)
@@ -780,8 +811,8 @@ async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_d
 
 class SessionCreateRequest(BaseModel):
     agent_id: str
-    session_id: Optional[str] = None
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    session_id: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class MessageAppendRequest(BaseModel):
@@ -818,7 +849,9 @@ async def create_session(body: SessionCreateRequest, db: AsyncSession = Depends(
 
 
 @app.post("/api/v1/sessions/{session_id}/messages", status_code=201)
-async def append_message(session_id: str, body: MessageAppendRequest, db: AsyncSession = Depends(get_db)):
+async def append_message(
+    session_id: str, body: MessageAppendRequest, db: AsyncSession = Depends(get_db)
+):
     session_repo = SessionRepository(db)
     message_repo = MessageRepository(db)
 
@@ -850,8 +883,8 @@ async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)):
 
 class InvokeRequest(BaseModel):
     message: str = Field(min_length=1, max_length=32_768)
-    session_id: Optional[str] = None
-    history: Optional[List[Dict[str, str]]] = None
+    session_id: str | None = None
+    history: list[dict[str, str]] | None = None
 
 
 @app.get("/api/v1/provider/status")
@@ -935,7 +968,7 @@ async def list_cyrex_agents(db: AsyncSession = Depends(get_db)):
         return {"agents": await cyrex_client.list_cyrex_agents()}
     except Exception as e:
         log.error("cyrex.list_agents.error", error=str(e))
-        raise HTTPException(status_code=502, detail=f"Cyrex request failed: {str(e)}") from e
+        raise HTTPException(status_code=502, detail=f"Cyrex request failed: {e!s}") from e
 
 
 @app.post("/api/v1/cyrex/sync/{persona_id}")
@@ -956,7 +989,7 @@ async def sync_persona_to_cyrex(persona_id: str, db: AsyncSession = Depends(get_
         }
     except Exception as e:
         log.error("cyrex.sync.error", persona_id=persona_id, error=str(e))
-        raise HTTPException(status_code=502, detail=f"Cyrex sync failed: {str(e)}") from e
+        raise HTTPException(status_code=502, detail=f"Cyrex sync failed: {e!s}") from e
 
 
 @app.post("/api/v1/cyrex/import/{cyrex_id}", response_model=PersonaProfile)
@@ -967,12 +1000,14 @@ async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(ge
     try:
         profile = await cyrex_client.pull_persona(cyrex_id)
         created = await persona_repo.create(_to_persona_model(profile))
-        await _record_persona_version(db, created, source="cyrex", summary=f"Imported from Cyrex {cyrex_id}")
+        await _record_persona_version(
+            db, created, source="cyrex", summary=f"Imported from Cyrex {cyrex_id}"
+        )
         await db.commit()
         return _to_persona_profile(created)
     except Exception as e:
         log.error("cyrex.import.error", cyrex_id=cyrex_id, error=str(e))
-        raise HTTPException(status_code=502, detail=f"Cyrex import failed: {str(e)}") from e
+        raise HTTPException(status_code=502, detail=f"Cyrex import failed: {e!s}") from e
 
 
 @app.post("/api/v1/agents/{agent_id}/invoke")
@@ -1018,10 +1053,12 @@ async def invoke_agent(
         llm = get_llm_provider(
             provider=provider_type,
             model=agent.model or settings.resolved_model(),
-            temperature=agent.temperature if agent.temperature is not None else settings.temperature,
+            temperature=agent.temperature
+            if agent.temperature is not None
+            else settings.temperature,
             max_tokens=agent.max_tokens or settings.max_tokens,
         )
-        
+
         if not llm.is_available():
             await agent_run_repo.mark_completed(
                 run.id,
@@ -1088,7 +1125,7 @@ async def invoke_agent(
             "message": body.message,
             "provider": llm.get_provider_type(),
         }
-        
+
     except Exception as e:
         generic_error_message = "[Persola Error] An internal error has occurred."
         await agent_run_repo.mark_completed(
@@ -1099,7 +1136,9 @@ async def invoke_agent(
             model=agent.model,
         )
         await db.commit()
-        log.error("llm.error", provider=provider_type, agent_id=agent_id, error=str(e), exc_info=True)
+        log.error(
+            "llm.error", provider=provider_type, agent_id=agent_id, error=str(e), exc_info=True
+        )
         return {
             "agent_id": agent_id,
             "response": generic_error_message,

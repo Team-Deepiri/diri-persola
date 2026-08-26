@@ -14,8 +14,7 @@ chart instead of an anonymous list of roles.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from dataclasses import dataclass
 
 from .personalities import BUILTIN_ARCHETYPES, PersonalityRole
 
@@ -24,11 +23,11 @@ from .personalities import BUILTIN_ARCHETYPES, PersonalityRole
 class OrgNode:
     role: str  # PersonalityRole value, or a custom role key for future personas
     title: str
-    reports_to: Optional[str] = None  # role key of manager, None = top of chart
-    email: Optional[str] = None  # optional agent inbox, mirrors Alook's @agent addresses
+    reports_to: str | None = None  # role key of manager, None = top of chart
+    email: str | None = None  # optional agent inbox, mirrors Alook's @agent addresses
     active: bool = True
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "role": self.role,
             "title": self.title,
@@ -38,19 +37,21 @@ class OrgNode:
         }
 
 
-def _default_nodes() -> Dict[str, OrgNode]:
+def _default_nodes() -> dict[str, OrgNode]:
     """Coordinator at the top, every built-in archetype reports to it.
 
     This is the same shape Alook ships by default: one lead role, everyone
     else reporting up to it, so a task dropped on the coordinator fans out
     automatically.
     """
-    nodes: Dict[str, OrgNode] = {}
+    nodes: dict[str, OrgNode] = {}
     for role, archetype in BUILTIN_ARCHETYPES.items():
         nodes[role.value] = OrgNode(
             role=role.value,
             title=archetype.name,
-            reports_to=None if role == PersonalityRole.COORDINATOR else PersonalityRole.COORDINATOR.value,
+            reports_to=None
+            if role == PersonalityRole.COORDINATOR
+            else PersonalityRole.COORDINATOR.value,
             email=f"{role.value}@team.persola.local",
         )
     return nodes
@@ -60,14 +61,14 @@ class OrgChart:
     """A team's reporting structure, keyed by ``team_id``."""
 
     def __init__(self) -> None:
-        self._charts: Dict[str, Dict[str, OrgNode]] = {}
+        self._charts: dict[str, dict[str, OrgNode]] = {}
 
-    def _chart(self, team_id: str) -> Dict[str, OrgNode]:
+    def _chart(self, team_id: str) -> dict[str, OrgNode]:
         if team_id not in self._charts:
             self._charts[team_id] = _default_nodes()
         return self._charts[team_id]
 
-    def get(self, team_id: str) -> List[OrgNode]:
+    def get(self, team_id: str) -> list[OrgNode]:
         return list(self._chart(team_id).values())
 
     def upsert_node(self, team_id: str, node: OrgNode) -> OrgNode:
@@ -79,25 +80,25 @@ class OrgChart:
         if role in chart:
             chart[role].active = False
 
-    def manager_of(self, team_id: str, role: str) -> Optional[OrgNode]:
+    def manager_of(self, team_id: str, role: str) -> OrgNode | None:
         chart = self._chart(team_id)
         node = chart.get(role)
         if node is None or node.reports_to is None:
             return None
         return chart.get(node.reports_to)
 
-    def reports_of(self, team_id: str, role: str) -> List[OrgNode]:
+    def reports_of(self, team_id: str, role: str) -> list[OrgNode]:
         chart = self._chart(team_id)
         return [n for n in chart.values() if n.reports_to == role and n.active]
 
-    def top_of_chart(self, team_id: str) -> Optional[OrgNode]:
+    def top_of_chart(self, team_id: str) -> OrgNode | None:
         chart = self._chart(team_id)
         for node in chart.values():
             if node.reports_to is None and node.active:
                 return node
         return None
 
-    def resolve_chain(self, team_id: str, role: str) -> List[str]:
+    def resolve_chain(self, team_id: str, role: str) -> list[str]:
         """Return the reporting chain from ``role`` up to the top, inclusive."""
         chart = self._chart(team_id)
         chain = [role]
@@ -109,7 +110,7 @@ class OrgChart:
             current = chart.get(current.reports_to)
         return chain
 
-    def to_dict(self, team_id: str) -> Dict[str, object]:
+    def to_dict(self, team_id: str) -> dict[str, object]:
         chart = self._chart(team_id)
         return {
             "team_id": team_id,

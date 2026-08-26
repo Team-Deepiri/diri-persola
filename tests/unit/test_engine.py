@@ -5,10 +5,10 @@ import pytest
 from persola.engine import PersonaEngine, SamplingCompiler
 from persola.models import PersonaProfile, PresetName
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def engine() -> PersonaEngine:
@@ -34,6 +34,7 @@ def formal_persona() -> PersonaProfile:
 # build_system_prompt
 # ---------------------------------------------------------------------------
 
+
 class TestBuildSystemPrompt:
     def test_returns_non_empty_string(self, engine, default_persona):
         prompt = engine.build_system_prompt(default_persona)
@@ -45,7 +46,9 @@ class TestBuildSystemPrompt:
         assert default_persona.name in prompt
 
     def test_high_creativity_differs_from_low(self, engine, creative_persona, formal_persona):
-        assert engine.build_system_prompt(creative_persona) != engine.build_system_prompt(formal_persona)
+        assert engine.build_system_prompt(creative_persona) != engine.build_system_prompt(
+            formal_persona
+        )
 
     def test_all_four_sections_present(self, engine, default_persona):
         prompt = engine.build_system_prompt(default_persona)
@@ -57,6 +60,7 @@ class TestBuildSystemPrompt:
 # ---------------------------------------------------------------------------
 # get_sampling_params
 # ---------------------------------------------------------------------------
+
 
 class TestGetSamplingParams:
     def test_returns_required_keys(self, engine, default_persona):
@@ -95,6 +99,7 @@ class TestGetSamplingParams:
 # blend_personas
 # ---------------------------------------------------------------------------
 
+
 class TestBlendPersonas:
     def test_50_50_blend_is_midpoint(self, engine):
         p1 = PersonaProfile(name="A", creativity=0.0)
@@ -131,6 +136,7 @@ class TestBlendPersonas:
 # ---------------------------------------------------------------------------
 # blend_multiple
 # ---------------------------------------------------------------------------
+
 
 class TestBlendMultiple:
     def test_normalizes_weights_and_blends_all_personas(self, engine):
@@ -182,6 +188,7 @@ class TestBlendMultiple:
 # apply_preset
 # ---------------------------------------------------------------------------
 
+
 class TestApplyPreset:
     def test_returns_persona_profile(self, engine):
         assert isinstance(engine.apply_preset(PresetName.CREATIVE), PersonaProfile)
@@ -207,16 +214,33 @@ class TestApplyPreset:
 # validate_knobs
 # ---------------------------------------------------------------------------
 
+
 class TestValidateKnobs:
     def test_all_valid_knobs_pass(self, engine):
         knobs = {
-            "creativity": 0.5, "humor": 0.5, "formality": 0.5, "verbosity": 0.5,
-            "empathy": 0.5, "confidence": 0.5, "openness": 0.5,
-            "conscientiousness": 0.5, "extraversion": 0.5, "agreeableness": 0.5,
-            "neuroticism": 0.5, "reasoning_depth": 0.5, "step_by_step": 0.5,
-            "creativity_in_reasoning": 0.5, "synthetics": 0.5, "abstraction": 0.5,
-            "patterns": 0.5, "accuracy": 0.8, "reliability": 0.8, "caution": 0.5,
-            "consistency": 0.8, "self_correction": 0.5, "transparency": 0.5,
+            "creativity": 0.5,
+            "humor": 0.5,
+            "formality": 0.5,
+            "verbosity": 0.5,
+            "empathy": 0.5,
+            "confidence": 0.5,
+            "openness": 0.5,
+            "conscientiousness": 0.5,
+            "extraversion": 0.5,
+            "agreeableness": 0.5,
+            "neuroticism": 0.5,
+            "reasoning_depth": 0.5,
+            "step_by_step": 0.5,
+            "creativity_in_reasoning": 0.5,
+            "synthetics": 0.5,
+            "abstraction": 0.5,
+            "patterns": 0.5,
+            "accuracy": 0.8,
+            "reliability": 0.8,
+            "caution": 0.5,
+            "consistency": 0.8,
+            "self_correction": 0.5,
+            "transparency": 0.5,
         }
         result = engine.validate_knobs(knobs)
         assert result["valid"] is True
@@ -231,6 +255,7 @@ class TestValidateKnobs:
 # ---------------------------------------------------------------------------
 # SamplingCompiler
 # ---------------------------------------------------------------------------
+
 
 class TestSamplingCompiler:
     def test_compile_returns_sampling_keys(self):

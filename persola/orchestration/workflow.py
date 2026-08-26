@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Optional
 
 from .state import WorkflowState
-
 
 LLMFn = Callable[[str, str], Awaitable[str]]
 
@@ -15,24 +14,26 @@ LLMFn = Callable[[str, str], Awaitable[str]]
 class DelegationStep:
     role: str
     task: str
-    depends_on: List[str] = field(default_factory=list)
-    parallel_group: Optional[str] = None
+    depends_on: list[str] = field(default_factory=list)
+    parallel_group: str | None = None
 
 
 @dataclass
 class WorkflowChain:
     goal: str
-    steps: List[DelegationStep] = field(default_factory=list)
+    steps: list[DelegationStep] = field(default_factory=list)
 
     def add(
         self,
         role: str,
         task: str,
-        depends_on: Optional[List[str]] = None,
-        parallel_group: Optional[str] = None,
+        depends_on: list[str] | None = None,
+        parallel_group: str | None = None,
     ) -> None:
         self.steps.append(
-            DelegationStep(role=role, task=task, depends_on=depends_on or [], parallel_group=parallel_group)
+            DelegationStep(
+                role=role, task=task, depends_on=depends_on or [], parallel_group=parallel_group
+            )
         )
 
 
@@ -41,7 +42,7 @@ async def execute_workflow_chain(
     llm_fn: LLMFn,
     *,
     system_prompt_for_role: Callable[[str], str],
-    tool_runner: Optional[Callable[[str, str], Awaitable[List[Dict]]]] = None,
+    tool_runner: Callable[[str, str], Awaitable[list[dict]]] | None = None,
 ) -> WorkflowState:
     return await execute_workflow_chain_parallel(
         chain,
@@ -56,12 +57,12 @@ async def execute_workflow_chain_parallel(
     llm_fn: LLMFn,
     *,
     system_prompt_for_role: Callable[[str], str],
-    tool_runner: Optional[Callable[[str, str], Awaitable[List[Dict]]]] = None,
+    tool_runner: Callable[[str, str], Awaitable[list[dict]]] | None = None,
 ) -> WorkflowState:
     import asyncio
 
     state = WorkflowState(goal=chain.goal)
-    completed: Dict[str, str] = {}
+    completed: dict[str, str] = {}
     i = 0
 
     while i < len(chain.steps):
@@ -74,7 +75,7 @@ async def execute_workflow_chain_parallel(
                 group_steps.append(chain.steps[j])
                 j += 1
 
-            async def _run_one(s: DelegationStep) -> tuple[str, str, List[Dict]]:
+            async def _run_one(s: DelegationStep) -> tuple[str, str, list[dict]]:
                 context_bits = []
                 for dep in s.depends_on:
                     if dep in completed:
@@ -83,7 +84,7 @@ async def execute_workflow_chain_parallel(
                 prompt = s.task if not context else f"{s.task}\n\nPrior context:\n{context}"
                 system = system_prompt_for_role(s.role)
                 output = await llm_fn(system, prompt)
-                tool_calls: List[Dict] = []
+                tool_calls: list[dict] = []
                 if tool_runner is not None:
                     tool_calls = await tool_runner(s.role, output)
                 return s.role, output, tool_calls
@@ -105,7 +106,7 @@ async def execute_workflow_chain_parallel(
         system = system_prompt_for_role(step.role)
         output = await llm_fn(system, prompt)
 
-        tool_calls: List[Dict] = []
+        tool_calls: list[dict] = []
         if tool_runner is not None:
             tool_calls = await tool_runner(step.role, output)
 

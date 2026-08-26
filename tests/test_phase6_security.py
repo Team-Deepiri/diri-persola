@@ -28,10 +28,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 @contextmanager
 def env_api_keys(keys: str | None):
@@ -81,6 +81,7 @@ def _make_stub_app(api_keys: str | None) -> Starlette:
 # 6.1  Auth – X-API-Key header
 # ---------------------------------------------------------------------------
 
+
 def test_missing_key_returns_401():
     """[6.1] No X-API-Key header → 401."""
     with env_api_keys("valid-key-abc"):
@@ -117,6 +118,7 @@ def test_auth_disabled_when_no_keys_configured():
 # 6.1  Auth – /health is exempt
 # ---------------------------------------------------------------------------
 
+
 def test_health_exempt_no_key():
     """[6.1] GET /health without X-API-Key must not return 401."""
     with env_api_keys("valid-key-abc"):
@@ -137,6 +139,7 @@ def test_health_exempt_wrong_key():
 # 6.2  Rate limiting – 31st invoke request returns 429
 # ---------------------------------------------------------------------------
 
+
 def test_invoke_31st_request_returns_429():
     """[6.2] Rate limit 30/minute on invoke: the 31st request must return 429."""
     test_limiter = Limiter(key_func=get_remote_address)
@@ -152,22 +155,18 @@ def test_invoke_31st_request_returns_429():
         return {"ok": True}
 
     client = TestClient(rate_app, raise_server_exceptions=False)
-    statuses = [
-        client.post(f"/api/v1/agents/{agent_id}/invoke").status_code
-        for _ in range(31)
-    ]
+    statuses = [client.post(f"/api/v1/agents/{agent_id}/invoke").status_code for _ in range(31)]
 
     assert all(s == 200 for s in statuses[:30]), (
         f"Requests 1–30 should succeed; got {statuses[:30]}"
     )
-    assert statuses[30] == 429, (
-        f"Request 31 should be rate-limited (429); got {statuses[30]}"
-    )
+    assert statuses[30] == 429, f"Request 31 should be rate-limited (429); got {statuses[30]}"
 
 
 # ---------------------------------------------------------------------------
 # 6.3  Input validation – Pydantic unit tests
 # ---------------------------------------------------------------------------
+
 
 def test_persona_name_over_200_chars_rejected():
     """[6.3] PersonaProfile.name > 200 chars → ValidationError (→ 422 via API)."""
@@ -245,6 +244,7 @@ def test_analysis_text_at_limit_accepted():
 # 6.4  Token-bucket rate limiter – unit tests (no Redis required)
 # ---------------------------------------------------------------------------
 
+
 class _FakeRedis:
     """Minimal in-memory stand-in for redis.asyncio.Redis used in bucket tests."""
 
@@ -252,7 +252,7 @@ class _FakeRedis:
         self._data: dict[str, dict[str, str]] = {}
         self._expiry: dict[str, float] = {}
 
-    async def eval(self, script, numkeys, *args):  # noqa: D401
+    async def eval(self, script, numkeys, *args):
         """Execute the Lua token-bucket logic in pure Python."""
         key = args[0]
         capacity = float(args[1])
@@ -319,7 +319,6 @@ async def test_token_bucket_remaining_decrements():
 @pytest.mark.asyncio
 async def test_token_bucket_refills_over_time():
     """[6.4] After waiting, tokens are replenished and a new request is allowed."""
-    import time
 
     bucket = _make_bucket(capacity=2, refill_rate=1.0)
     # Drain the bucket
@@ -362,4 +361,3 @@ async def test_token_bucket_fails_open_on_redis_error():
     allowed, remaining = await bucket.consume("user:broken")
     assert allowed, "Should fail open when Redis is unreachable"
     assert remaining == bucket.capacity
-

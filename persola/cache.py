@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
-from uuid import UUID
 import json
 import os
 import random
 import time
+from typing import Any
+from uuid import UUID
 
 from redis.asyncio import Redis
 
@@ -56,7 +56,9 @@ class PersonaCache:
         except Exception:
             return None
 
-    async def _get_entry_for_generation(self, persona_id: UUID, generation: int) -> dict[str, Any] | None:
+    async def _get_entry_for_generation(
+        self, persona_id: UUID, generation: int
+    ) -> dict[str, Any] | None:
         raw = await self.client.get(self._entry_key(persona_id, generation))
         if not raw:
             return None
@@ -71,7 +73,7 @@ class PersonaCache:
             current.update(fields)
             await self.client.set(entry_key, json.dumps(current), ex=self._ttl())
         except Exception:
-            return None
+            return
 
     async def get_system_prompt(self, persona_id: UUID) -> str | None:
         payload = await self._get_entry(persona_id)
@@ -94,13 +96,16 @@ class PersonaCache:
             generation_key = self._generation_key(persona_id)
             current_generation = await self._get_generation(persona_id)
             next_generation = current_generation + 1
-            entry_keys = [self._entry_key(persona_id, current_generation), self._entry_key(persona_id, next_generation)]
+            entry_keys = [
+                self._entry_key(persona_id, current_generation),
+                self._entry_key(persona_id, next_generation),
+            ]
             async with self.client.pipeline(transaction=False) as pipe:
                 pipe.set(generation_key, next_generation)
                 pipe.delete(*entry_keys)
                 await pipe.execute()
         except Exception:
-            return None
+            return
 
 
 # ---------------------------------------------------------------------------
@@ -223,4 +228,3 @@ class TokenBucketRateLimiter:
         if self._redis is not None:
             await self._redis.aclose()
             self._redis = None
-

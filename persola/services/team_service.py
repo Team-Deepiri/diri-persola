@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,7 @@ from ..db.repositories.team_repository import (
 )
 from ..models import PersonaProfile
 from ..orchestration.redis_memory import REDIS_TEAM_MEMORY
-from ..orchestration.state import TeamSessionState, WorkflowState
+from ..orchestration.state import TeamSessionState
 from ..orchestration.team import TeamOrchestrator, TeamRunResult
 from ..orchestration.tool_loader import build_team_registry
 
@@ -110,7 +111,9 @@ class TeamService:
                 task=step.task,
                 output=step.output,
                 tool_calls=step.tool_calls,
-                parallel_group=step.tool_calls[0].get("parallel_group") if step.tool_calls else None,
+                parallel_group=step.tool_calls[0].get("parallel_group")
+                if step.tool_calls
+                else None,
             )
             step_order += 1
             await self.memory.upsert_entry(

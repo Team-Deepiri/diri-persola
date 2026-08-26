@@ -2,14 +2,13 @@
 
 import pytest
 
-from persola.engine import PersonaEngine
 from persola.models import PersonaProfile
-from persola.orchestration.memory import GLOBAL_MEMORY, MemoryStore
+from persola.orchestration.memory import GLOBAL_MEMORY
 from persola.orchestration.parallel import ParallelToolExecutor
 from persola.orchestration.personalities import PersonalityRole
 from persola.orchestration.router import route_task, select_delegation_plan
 from persola.orchestration.team import TeamOrchestrator
-from persola.orchestration.tools import ToolRegistry, build_default_registry
+from persola.orchestration.tools import build_default_registry
 from persola.orchestration.workflow import WorkflowChain, execute_workflow_chain_parallel
 from persola.services.team_service import TeamService
 
@@ -114,7 +113,9 @@ class TestTeamServicePersistence:
             return "worker output"
 
         service = TeamService(db_session)
-        result = await service.invoke("design onboarding flow", llm_fn=fake_llm, use_langgraph=False)
+        result = await service.invoke(
+            "design onboarding flow", llm_fn=fake_llm, use_langgraph=False
+        )
         detail = await service.get_session_detail(result.session_id)
 
         assert detail is not None

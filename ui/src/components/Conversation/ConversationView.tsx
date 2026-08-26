@@ -53,7 +53,7 @@ export function ConversationView({ initialAgentId }: { initialAgentId?: string }
       })
       .catch(err => console.error('Failed to load agents:', err))
       .finally(() => setAgentsLoading(false));
-  }, []);
+  }, [initialAgentId]);
 
   // ── Load sessions when agent changes ──────────────────────────────────────
   useEffect(() => {

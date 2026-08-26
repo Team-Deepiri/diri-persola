@@ -21,6 +21,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 # 7.3  GET /metrics — Prometheus text format
 # ---------------------------------------------------------------------------
 
+
 class TestMetricsEndpoint:
     """Validate that /metrics returns well-formed Prometheus text exposition."""
 
@@ -124,13 +125,12 @@ class TestMetricsEndpoint:
 
     def test_metrics_exempt_from_api_key_auth(self):
         """[7.3] /metrics must not require X-API-Key even when auth is enabled."""
-        import contextlib
 
+        from starlette.applications import Starlette
+        from starlette.routing import Route
         from starlette.testclient import TestClient
 
         from persola.auth import APIKeyAuth
-        from starlette.applications import Starlette
-        from starlette.routing import Route
         from persola.metrics import metrics_endpoint
 
         app = Starlette(routes=[Route("/metrics", metrics_endpoint)])
@@ -145,6 +145,7 @@ class TestMetricsEndpoint:
 # ---------------------------------------------------------------------------
 # 7.2  Structured logging — JSON output
 # ---------------------------------------------------------------------------
+
 
 class TestStructuredLoggingJSON:
     """Validate that log output is valid JSON when LOG_FORMAT=json."""

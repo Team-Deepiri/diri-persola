@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from redis.asyncio import Redis
 
@@ -31,17 +31,18 @@ class RedisTeamMemory:
         key: str,
         value: Any,
         *,
-        tags: Optional[List[str]] = None,
+        tags: list[str] | None = None,
         source_role: str = "system",
+        ttl_seconds: int = 86400,
     ) -> None:
         payload = json.dumps({"value": value, "tags": tags or [], "source_role": source_role})
         try:
             await self.client.hset(self._hash_key(session_id), key, payload)
-            await self.client.expire(self._hash_key(session_id), 86400)
+            await self.client.expire(self._hash_key(session_id), ttl_seconds)
         except Exception:
-            return None
+            return
 
-    async def recall(self, session_id: str, key: str) -> Optional[Any]:
+    async def recall(self, session_id: str, key: str) -> Any | None:
         try:
             raw = await self.client.hget(self._hash_key(session_id), key)
             if not raw:
@@ -51,13 +52,13 @@ class RedisTeamMemory:
         except Exception:
             return None
 
-    async def search(self, session_id: str, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    async def search(self, session_id: str, query: str, limit: int = 10) -> list[dict[str, Any]]:
         try:
             all_entries = await self.client.hgetall(self._hash_key(session_id))
         except Exception:
             return []
         query_lower = query.lower()
-        hits: List[Dict[str, Any]] = []
+        hits: list[dict[str, Any]] = []
         for key, raw in all_entries.items():
             try:
                 data = json.loads(raw)
@@ -68,12 +69,12 @@ class RedisTeamMemory:
                 hits.append({"key": key, **data})
         return hits[:limit]
 
-    async def snapshot(self, session_id: str) -> Dict[str, Any]:
+    async def snapshot(self, session_id: str) -> dict[str, Any]:
         try:
             all_entries = await self.client.hgetall(self._hash_key(session_id))
         except Exception:
             return {}
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for key, raw in all_entries.items():
             try:
                 out[key] = json.loads(raw).get("value")
@@ -85,7 +86,7 @@ class RedisTeamMemory:
         try:
             await self.client.delete(self._hash_key(session_id))
         except Exception:
-            return None
+            return
 
 
 REDIS_TEAM_MEMORY = RedisTeamMemory()
