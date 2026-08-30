@@ -25,8 +25,8 @@ def upgrade() -> None:
 		sa.Column("reports_to", sa.String(length=100), nullable=True),
 		sa.Column("email", sa.String(length=255), nullable=True),
 		sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
-		sa.Column("created_at", sa.TIMESTAMP(timezone=False), nullable=False, server_default=sa.text("now()")),
-		sa.Column("updated_at", sa.TIMESTAMP(timezone=False), nullable=False, server_default=sa.text("now()")),
+		sa.Column("created_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
+		sa.Column("updated_at", sa.TIMESTAMP(timezone=True), nullable=False, server_default=sa.text("now()")),
 		sa.UniqueConstraint("team_id", "role", name="uq_org_node_team_role"),
 	)
 	op.create_index("idx_org_nodes_team_id", "org_nodes", ["team_id"])

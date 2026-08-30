@@ -96,6 +96,10 @@ async def lifespan(application: FastAPI):
     async for db in get_db():
         repo = PersonaRepository(db)
         await repo.seed_presets(DEFAULT_PRESETS)
+        # Seed the default org chart so GET /org-chart stays a pure read.
+        from ..orchestration.org_chart import GLOBAL_ORG_CHART
+
+        await GLOBAL_ORG_CHART.to_dict("default", session=db)
         await db.commit()
         break
 
@@ -105,23 +109,21 @@ async def lifespan(application: FastAPI):
         from ..orchestration.daemon import TaskQueueWorker
         from ..orchestration.team import TeamOrchestrator
 
-        def _llm_fn_factory():
-            llm = get_llm_provider()
+        # Instantiate once — provider setup can be costly; llm_settings caches anyway.
+        llm = get_llm_provider()
 
-            async def _llm_fn(system: str, user: str) -> str:
-                return await llm.chat([{"role": "user", "content": user}], system_prompt=system)
-
-            return _llm_fn
+        async def _llm_fn(system: str, user: str) -> str:
+            return await llm.chat([{"role": "user", "content": user}], system_prompt=system)
 
         worker = TaskQueueWorker(
-            team_factory=lambda: TeamOrchestrator(llm_fn=_llm_fn_factory()),
+            team_factory=lambda: TeamOrchestrator(llm_fn=_llm_fn),
             role=None,
         )
         worker_task = asyncio.create_task(
             worker.run_forever(
                 team_id="default",
                 poll_interval=WORKQUEUE_POLL_INTERVAL,
-                available_check=lambda: get_llm_provider().is_available(),
+                available_check=lambda: llm.is_available(),
             ),
             name="workqueue-daemon",
         )

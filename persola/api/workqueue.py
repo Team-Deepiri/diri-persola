@@ -29,9 +29,7 @@ router = APIRouter(prefix="/api/v1/workqueue", tags=["workqueue"])
 
 @router.get("/org-chart")
 async def get_org_chart(team_id: str = "default", db: AsyncSession = Depends(get_db)):
-    chart = await GLOBAL_ORG_CHART.to_dict(team_id, session=db)
-    await db.commit()  # seeding default nodes on first access is a write
-    return chart
+    return await GLOBAL_ORG_CHART.to_dict(team_id, session=db)
 
 
 class OrgNodeRequest(BaseModel):

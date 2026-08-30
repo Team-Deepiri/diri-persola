@@ -800,6 +800,8 @@ class OrgNodeModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	reports_to: Mapped[str | None] = mapped_column(String(100), nullable=True)
 	email: Mapped[str | None] = mapped_column(String(255), nullable=True)
 	active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+	created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow)
+	updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
 class WorkTaskModel(UUIDPrimaryKeyMixin, Base):
