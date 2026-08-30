@@ -2,6 +2,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from uuid import UUID
 import re
+import asyncio
+import contextlib
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -26,6 +28,10 @@ SAFE_STATIC_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 # Token-bucket rate limiter for the invoke endpoint (30-token burst, 0.5 t/s refill).
 # Capacity matches the slowapi limit so both layers agree on the burst ceiling.
 _invoke_bucket = TokenBucketRateLimiter(capacity=30, refill_rate=0.5)
+
+# Background workqueue daemon: enabled by default, poll cadence configurable.
+WORKQUEUE_WORKER_ENABLED = os.getenv("PERSOLA_WORKQUEUE_WORKER", "1") != "0"
+WORKQUEUE_POLL_INTERVAL = float(os.getenv("PERSOLA_WORKQUEUE_POLL_INTERVAL", "2.0"))
 
 
 async def _invoke_rate_limit(request: Request) -> None:
@@ -80,7 +86,7 @@ log = structlog.get_logger("persola.api")
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    """Startup: init DB, seed presets. Shutdown: dispose connection pool."""
+    """Startup: init DB, seed presets, autostart workqueue daemon. Shutdown: stop daemon, dispose pool."""
     
     log.info("db.init")
     await init_db()
@@ -90,10 +96,56 @@ async def lifespan(application: FastAPI):
     async for db in get_db():
         repo = PersonaRepository(db)
         await repo.seed_presets(DEFAULT_PRESETS)
+        # Seed the default org chart so GET /org-chart stays a pure read.
+        from ..orchestration.org_chart import GLOBAL_ORG_CHART
+
+        await GLOBAL_ORG_CHART.to_dict("default", session=db)
         await db.commit()
         break
 
+    # Background worker: claims queued tasks and runs the team on them.
+    # Gated on LLM availability so a downed provider doesn't claim-and-fail everything.
+    if WORKQUEUE_WORKER_ENABLED:
+        from ..orchestration.daemon import TaskQueueWorker
+        from ..orchestration.team import TeamOrchestrator
+
+        # Instantiate once — provider setup can be costly; llm_settings caches anyway.
+        llm = get_llm_provider()
+
+        async def _llm_fn(system: str, user: str) -> str:
+            return await llm.chat([{"role": "user", "content": user}], system_prompt=system)
+
+        worker = TaskQueueWorker(
+            team_factory=lambda: TeamOrchestrator(llm_fn=_llm_fn),
+            role=None,
+        )
+        worker_task = asyncio.create_task(
+            worker.run_forever(
+                team_id="default",
+                poll_interval=WORKQUEUE_POLL_INTERVAL,
+                available_check=lambda: llm.is_available(),
+            ),
+            name="workqueue-daemon",
+        )
+        application.state.workqueue_worker = worker
+        application.state.workqueue_worker_task = worker_task
+        log.info(
+            "workqueue.daemon_started",
+            poll_interval=WORKQUEUE_POLL_INTERVAL,
+            team_id="default",
+        )
+
     yield
+
+    worker = getattr(application.state, "workqueue_worker", None)
+    if worker is not None:
+        worker.stop()
+        task = getattr(application.state, "workqueue_worker_task", None)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        log.info("workqueue.daemon_stopped")
 
     log.info("db.shutdown")
     await close_db()
