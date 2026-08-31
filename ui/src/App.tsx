@@ -6,6 +6,7 @@ import { AnalysisView } from './components/Analysis';
 import { BlendTool } from './components/BlendTool';
 import { TeamWorkbench } from './components/TeamWorkbench';
 import { CityView } from './components/CityView';
+import { WorkqueueView } from './components/Workqueue';
 import { PersonaLibrary } from './components/PersonaLibrary';
 import { SettingsView } from './components/Settings';
 import {
@@ -17,6 +18,7 @@ import {
   IconSliders,
   IconUser,
   IconUsers,
+  IconWorkqueue,
 } from './components/NavIcons';
 import './App.css';
 
@@ -78,6 +80,9 @@ function App() {
             <NavLink to="/city" className={navCls}>
               <IconCity /> City
             </NavLink>
+            <NavLink to="/workqueue" className={navCls}>
+              <IconWorkqueue /> Work Queue
+            </NavLink>
           </div>
 
           <div className="nav-section">
@@ -99,6 +104,7 @@ function App() {
           <Route path="/blend" element={<BlendTool />} />
           <Route path="/teams" element={<TeamWorkbench />} />
           <Route path="/city" element={<CityView />} />
+          <Route path="/workqueue" element={<WorkqueueView />} />
           <Route path="/settings" element={<SettingsView />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -8,7 +8,7 @@ Persola's ``TeamOrchestrator.run`` is currently a blocking request/response:
 submit a task, wait for the whole team to finish, get one answer back. That
 works for interactive chat but not for background/production workloads
 (e.g. "keep triaging the inbox", "review every PR opened today"). This
-module adds the missing async layer: an in-process queue with kanban
+module adds the missing async layer: a durable DB-backed queue with kanban
 columns (queued -> claimed -> in_progress -> done/failed/blocked) that a
 worker (see ``daemon.py``) can poll the way Alook's CLI daemon polls its
 cloud queue.
@@ -18,22 +18,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..db.models import WorkTaskStatus as TaskStatus
+from ..db.repositories.workqueue_repository import WorkTaskRepository
+from ._session_store import SessionFactoryMixin
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-class TaskStatus(str, Enum):
-    QUEUED = "queued"
-    CLAIMED = "claimed"
-    IN_PROGRESS = "in_progress"
-    BLOCKED = "blocked"
-    DONE = "done"
-    FAILED = "failed"
 
 
 @dataclass
@@ -70,18 +66,35 @@ class AgentTask:
         }
 
 
-class AgentTaskQueue:
-    """In-process kanban queue, one board per ``team_id``.
+def _hydrate_task(row: Any) -> AgentTask:
+    return AgentTask(
+        task_id=row.task_id,
+        team_id=row.team_id,
+        role=row.role,
+        subtask=row.subtask,
+        origin=row.origin,
+        status=TaskStatus(row.status),
+        result=row.result,
+        error=row.error,
+        parent_task_id=row.parent_task_id,
+        session_id=row.session_id,
+        created_at=row.created_at,
+        claimed_at=row.claimed_at,
+        completed_at=row.completed_at,
+    )
 
-    Swap the storage for a DB table later (mirrors Alook's D1-backed
-    ``agentTaskQueue``) without changing the public interface — everything
-    reads/writes through ``enqueue`` / ``claim_next`` / ``complete`` / ``fail``.
+
+class AgentTaskQueue(SessionFactoryMixin):
+    """DB-backed kanban queue, one board per ``team_id``.
+
+    Public interface (``enqueue`` / ``claim_next`` / ``complete`` / ``fail``)
+    is unchanged from the in-memory version; storage now lives in ``work_tasks``.
+    Every method accepts an optional ``session`` — when provided the caller owns
+    the transaction; otherwise a session is opened from the injected factory
+    (``AsyncSessionLocal`` in production) and committed.
     """
 
-    def __init__(self) -> None:
-        self._tasks: Dict[str, AgentTask] = {}
-
-    def enqueue(
+    async def enqueue(
         self,
         *,
         team_id: str,
@@ -90,6 +103,7 @@ class AgentTaskQueue:
         origin: str = "user",
         parent_task_id: Optional[str] = None,
         session_id: Optional[str] = None,
+        session: Optional[AsyncSession] = None,
     ) -> AgentTask:
         task = AgentTask(
             team_id=team_id,
@@ -99,63 +113,118 @@ class AgentTaskQueue:
             parent_task_id=parent_task_id,
             session_id=session_id,
         )
-        self._tasks[task.task_id] = task
-        return task
 
-    def claim_next(self, *, team_id: str, role: Optional[str] = None) -> Optional[AgentTask]:
-        """Autonomous pickup: the next queued task for this team (optionally a specific role)."""
-        for task in sorted(self._tasks.values(), key=lambda t: t.created_at):
-            if task.team_id != team_id or task.status != TaskStatus.QUEUED:
-                continue
-            if role is not None and task.role != role:
-                continue
-            task.status = TaskStatus.CLAIMED
-            task.claimed_at = _utcnow()
+        async def _op(s: AsyncSession) -> AgentTask:
+            repo = WorkTaskRepository(s)
+            await repo.create_task(
+                task_id=task.task_id,
+                team_id=task.team_id,
+                role=task.role,
+                subtask=task.subtask,
+                origin=task.origin,
+                status=TaskStatus.QUEUED.value,
+                parent_task_id=task.parent_task_id,
+                session_id=task.session_id,
+            )
             return task
-        return None
 
-    def mark_in_progress(self, task_id: str) -> Optional[AgentTask]:
-        task = self._tasks.get(task_id)
-        if task:
-            task.status = TaskStatus.IN_PROGRESS
-        return task
+        return await self._run(session, _op, commit=True)
 
-    def block(self, task_id: str, reason: str) -> Optional[AgentTask]:
-        task = self._tasks.get(task_id)
-        if task:
-            task.status = TaskStatus.BLOCKED
-            task.error = reason
-        return task
+    async def claim_next(
+        self,
+        *,
+        team_id: str,
+        role: Optional[str] = None,
+        session: Optional[AsyncSession] = None,
+    ) -> Optional[AgentTask]:
+        """Autonomous pickup: the next queued task for this team (optionally a specific role)."""
 
-    def complete(self, task_id: str, result: str) -> Optional[AgentTask]:
-        task = self._tasks.get(task_id)
-        if task:
-            task.status = TaskStatus.DONE
-            task.result = result
-            task.completed_at = _utcnow()
-        return task
+        async def _op(s: AsyncSession) -> Optional[AgentTask]:
+            repo = WorkTaskRepository(s)
+            row = await repo.claim_next(team_id, role)
+            return _hydrate_task(row) if row is not None else None
 
-    def fail(self, task_id: str, error: str) -> Optional[AgentTask]:
-        task = self._tasks.get(task_id)
-        if task:
-            task.status = TaskStatus.FAILED
-            task.error = error
-            task.completed_at = _utcnow()
-        return task
+        return await self._run(session, _op, commit=True)
 
-    def get(self, task_id: str) -> Optional[AgentTask]:
-        return self._tasks.get(task_id)
+    async def mark_in_progress(
+        self, task_id: str, *, session: Optional[AsyncSession] = None
+    ) -> Optional[AgentTask]:
+        return await self._set_status(task_id, TaskStatus.IN_PROGRESS, session=session)
 
-    def board(self, team_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    async def block(
+        self, task_id: str, reason: str, *, session: Optional[AsyncSession] = None
+    ) -> Optional[AgentTask]:
+        return await self._set_status(task_id, TaskStatus.BLOCKED, error=reason, session=session)
+
+    async def complete(
+        self, task_id: str, result: str, *, session: Optional[AsyncSession] = None
+    ) -> Optional[AgentTask]:
+        return await self._set_status(
+            task_id, TaskStatus.DONE, result=result, mark_completed=True, session=session
+        )
+
+    async def fail(
+        self, task_id: str, error: str, *, session: Optional[AsyncSession] = None
+    ) -> Optional[AgentTask]:
+        return await self._set_status(
+            task_id, TaskStatus.FAILED, error=error, mark_completed=True, session=session
+        )
+
+    async def _set_status(
+        self,
+        task_id: str,
+        status: TaskStatus,
+        *,
+        result: Optional[str] = None,
+        error: Optional[str] = None,
+        mark_completed: bool = False,
+        session: Optional[AsyncSession] = None,
+    ) -> Optional[AgentTask]:
+        async def _op(s: AsyncSession) -> Optional[AgentTask]:
+            repo = WorkTaskRepository(s)
+            row = await repo.update_status(
+                task_id,
+                status.value,
+                result=result,
+                error=error,
+                mark_completed=mark_completed,
+            )
+            return _hydrate_task(row) if row is not None else None
+
+        return await self._run(session, _op, commit=True)
+
+    async def get(
+        self, task_id: str, *, session: Optional[AsyncSession] = None
+    ) -> Optional[AgentTask]:
+        async def _op(s: AsyncSession) -> Optional[AgentTask]:
+            repo = WorkTaskRepository(s)
+            row = await repo.get_by_task_id(task_id)
+            return _hydrate_task(row) if row is not None else None
+
+        return await self._run(session, _op, commit=False)
+
+    async def board(
+        self, team_id: str, *, session: Optional[AsyncSession] = None
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """Kanban view: tasks grouped by column, newest first within each column."""
-        columns: Dict[str, List[Dict[str, Any]]] = {s.value: [] for s in TaskStatus}
-        for task in sorted(self._tasks.values(), key=lambda t: t.created_at, reverse=True):
-            if task.team_id == team_id:
+        async def _op(s: AsyncSession) -> Dict[str, List[Dict[str, Any]]]:
+            repo = WorkTaskRepository(s)
+            tasks = [_hydrate_task(row) for row in await repo.list_for_team(team_id)]
+            columns: Dict[str, List[Dict[str, Any]]] = {status.value: [] for status in TaskStatus}
+            for task in sorted(tasks, key=lambda t: t.created_at, reverse=True):
                 columns[task.status.value].append(task.to_dict())
-        return columns
+            return columns
 
-    def children(self, parent_task_id: str) -> List[AgentTask]:
-        return [t for t in self._tasks.values() if t.parent_task_id == parent_task_id]
+        return await self._run(session, _op, commit=False)
+
+    async def children(
+        self, parent_task_id: str, *, session: Optional[AsyncSession] = None
+    ) -> List[AgentTask]:
+        async def _op(s: AsyncSession) -> List[AgentTask]:
+            repo = WorkTaskRepository(s)
+            return [_hydrate_task(row) for row in await repo.children(parent_task_id)]
+
+        return await self._run(session, _op, commit=False)
 
 
 # Process-wide queue, same singleton pattern as GLOBAL_MEMORY / GLOBAL_ORG_CHART.

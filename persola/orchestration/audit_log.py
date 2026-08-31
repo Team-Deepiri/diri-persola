@@ -15,21 +15,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..db.models import AuditEventType
+from ..db.repositories.workqueue_repository import AuditEventRepository
+from ._session_store import SessionFactoryMixin
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-class AuditEventType(str, Enum):
-    INSTRUCTION = "instruction"  # a task/subtask was assigned to a role
-    DECISION = "decision"  # a role produced output that changes what happens next
-    REPLY = "reply"  # a role replied to whoever assigned the work
-    STATUS_CHANGE = "status_change"  # kanban column change on an AgentTask
-    TOOL_CALL = "tool_call"
 
 
 @dataclass
@@ -60,11 +57,25 @@ class AuditEvent:
         }
 
 
-class AuditLog:
-    def __init__(self) -> None:
-        self._events: List[AuditEvent] = []
+def _hydrate_event(row: Any) -> AuditEvent:
+    return AuditEvent(
+        event_id=row.event_id,
+        team_id=row.team_id,
+        session_id=row.session_id,
+        task_id=row.task_id,
+        event_type=AuditEventType(row.event_type),
+        actor=row.actor,
+        recipient=row.recipient,
+        summary=row.summary,
+        detail=dict(row.detail or {}),
+        at=row.created_at,
+    )
 
-    def record(
+
+class AuditLog(SessionFactoryMixin):
+    """DB-backed chronological log of team/session events, stored in ``audit_events``."""
+
+    async def record(
         self,
         *,
         team_id: str,
@@ -75,6 +86,7 @@ class AuditLog:
         session_id: Optional[str] = None,
         task_id: Optional[str] = None,
         detail: Optional[Dict[str, Any]] = None,
+        session: Optional[AsyncSession] = None,
     ) -> AuditEvent:
         event = AuditEvent(
             team_id=team_id,
@@ -86,24 +98,42 @@ class AuditLog:
             summary=summary,
             detail=detail or {},
         )
-        self._events.append(event)
-        return event
 
-    def timeline(
+        async def _op(s: AsyncSession) -> AuditEvent:
+            repo = AuditEventRepository(s)
+            await repo.create_event(
+                event_id=event.event_id,
+                team_id=event.team_id,
+                event_type=event.event_type.value,
+                actor=event.actor,
+                summary=event.summary,
+                recipient=event.recipient,
+                session_id=event.session_id,
+                task_id=event.task_id,
+                detail=event.detail,
+                created_at=event.at,
+            )
+            return event
+
+        return await self._run(session, _op, commit=True)
+
+    async def timeline(
         self,
         team_id: str,
         *,
         session_id: Optional[str] = None,
         task_id: Optional[str] = None,
         limit: int = 200,
+        session: Optional[AsyncSession] = None,
     ) -> List[Dict[str, Any]]:
-        events = [e for e in self._events if e.team_id == team_id]
-        if session_id is not None:
-            events = [e for e in events if e.session_id == session_id]
-        if task_id is not None:
-            events = [e for e in events if e.task_id == task_id]
-        events.sort(key=lambda e: e.at)
-        return [e.to_dict() for e in events[-limit:]]
+        async def _op(s: AsyncSession) -> List[Dict[str, Any]]:
+            repo = AuditEventRepository(s)
+            events = [_hydrate_event(row) for row in await repo.timeline(
+                team_id, session_id=session_id, task_id=task_id, limit=limit
+            )]
+            return [e.to_dict() for e in events]
+
+        return await self._run(session, _op, commit=False)
 
 
 # Process-wide audit log, same singleton pattern as the other orchestration stores.

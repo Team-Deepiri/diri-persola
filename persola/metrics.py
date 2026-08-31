@@ -135,6 +135,18 @@ CITY_SUCCESSIONS_TOTAL = Counter(
     "Legacy handoffs to next-generation heirs",
 )
 
+WORKQUEUE_TASKS_TOTAL = Counter(
+    "persola_workqueue_tasks_total",
+    "Workqueue tasks processed by the daemon, by outcome",
+    ["status"],
+)
+
+WORKQUEUE_TASK_DURATION = Histogram(
+    "persola_workqueue_task_duration_seconds",
+    "Workqueue task processing time (claim -> done/failed)",
+    buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0),
+)
+
 
 def record_llm_tokens(provider: str, model: str, tokens: int) -> None:
     """Increment the LLM token counter.  Call from invoke_agent on success."""
@@ -196,6 +208,14 @@ def record_city_death(count: int = 1) -> None:
 def record_city_succession(count: int = 1) -> None:
     if count > 0:
         CITY_SUCCESSIONS_TOTAL.inc(count)
+
+
+def record_workqueue_task(status: str) -> None:
+    WORKQUEUE_TASKS_TOTAL.labels(status=status or "unknown").inc()
+
+
+def observe_workqueue_task_duration(seconds: float) -> None:
+    WORKQUEUE_TASK_DURATION.observe(max(0.0, seconds))
 
 
 # ---------------------------------------------------------------------------
