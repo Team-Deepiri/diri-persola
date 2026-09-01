@@ -54,12 +54,14 @@ class TeamOrchestrator:
         persona_profile: Optional[PersonaProfile] = None,
         tool_registry: Optional[ToolRegistry] = None,
         use_langgraph: bool = True,
+        tenant_id: Optional[str] = None,
     ) -> None:
         self.llm_fn = llm_fn
         self.persona_engine = PersonaEngine()
         self.base_profile = persona_profile or PersonaProfile(name="Team Default")
         self._tool_registry = tool_registry
         self.use_langgraph = use_langgraph
+        self.tenant_id = tenant_id
 
     def _system_prompt_for_role(self, role_key: str) -> str:
         try:
@@ -250,7 +252,7 @@ class TeamOrchestrator:
             detail={"delegation_plan": plan},
         )
 
-        registry = self._tool_registry or build_default_registry(session.session_id)
+        registry = self._tool_registry or build_default_registry(session.session_id, tenant_id=self.tenant_id)
 
         if self.use_langgraph:
             return await self._run_langgraph_path(task, specialists, session, registry)

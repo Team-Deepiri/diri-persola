@@ -125,11 +125,29 @@ class UpdatedAtMixin(CreatedAtMixin):
 	)
 
 
-class PersonaModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+# Sentinel tenant used as the default for legacy / un-scoped rows and for the
+# system pre-seeded presets. Payloads created without an explicit tenant land
+# here rather than failing, preserving backward compatibility.
+DEFAULT_TENANT = PyUUID("00000000-0000-0000-0000-000000000000")
+
+
+class TenantMixin:
+    """Adds a tenant_id column used to scope rows to an owning tenant."""
+
+    tenant_id: Mapped[PyUUID] = mapped_column(
+        UUID(as_uuid=True),
+        nullable=False,
+        default=DEFAULT_TENANT,
+        index=True,
+    )
+
+
+class PersonaModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 	__tablename__ = "personas"
 	__table_args__ = (
 		Index("idx_personas_name", "name"),
 		Index("idx_personas_is_preset", "is_preset"),
+		UniqueConstraint("tenant_id", "name", name="uq_personas_tenant_name"),
 		*_score_constraints(*PERSONA_KNOB_FIELDS),
 		CheckConstraint("temperature >= 0.0 AND temperature <= 2.0", name="ck_personas_temperature_range"),
 		CheckConstraint("max_tokens >= 1 AND max_tokens <= 32000", name="ck_personas_max_tokens_range"),
@@ -219,10 +237,11 @@ class PersonaModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 		return model
 
 
-class AgentModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+class AgentModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 	__tablename__ = "agents"
 	__table_args__ = (
 		Index("idx_agents_persona_id", "persona_id"),
+		UniqueConstraint("tenant_id", "name", name="uq_agents_tenant_name"),
 		CheckConstraint("temperature IS NULL OR (temperature >= 0.0 AND temperature <= 2.0)", name="ck_agents_temperature_range"),
 		CheckConstraint("max_tokens IS NULL OR (max_tokens >= 1 AND max_tokens <= 32000)", name="ck_agents_max_tokens_range"),
 		_enum_constraint("role", tuple(role.value for role in AgentRole), name="ck_agents_role_values"),
@@ -283,11 +302,12 @@ class AgentModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 		)
 
 
-class SessionModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class SessionModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	__tablename__ = "sessions"
 	__table_args__ = (
 		Index("idx_sessions_agent_id", "agent_id"),
 		Index("idx_sessions_session_id", "session_id"),
+		UniqueConstraint("tenant_id", "session_id", name="uq_sessions_tenant_session_id"),
 	)
 
 	agent_id: Mapped[PyUUID] = mapped_column(
@@ -295,7 +315,7 @@ class SessionModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 		ForeignKey("agents.id", ondelete="CASCADE"),
 		nullable=False,
 	)
-	session_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+	session_id: Mapped[str] = mapped_column(String(100), nullable=False)
 	session_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
 	message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 	last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -305,7 +325,7 @@ class SessionModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	runs: Mapped[list["AgentRunModel"]] = relationship(back_populates="session")
 
 
-class MessageModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class MessageModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	__tablename__ = "messages"
 	__table_args__ = (
 		Index("idx_messages_session_id", "session_id"),
@@ -373,7 +393,7 @@ class AgentToolModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 		return cls(agent_id=agent_id, name=name)
 
 
-class AnalysisRunModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class AnalysisRunModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	__tablename__ = "analysis_runs"
 	__table_args__ = (
 		Index("idx_analysis_runs_persona_id", "persona_id"),
@@ -396,7 +416,7 @@ class AnalysisRunModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	persona: Mapped["PersonaModel | None"] = relationship(back_populates="analysis_runs")
 
 
-class AgentRunModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class AgentRunModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	__tablename__ = "agent_runs"
 	__table_args__ = (
 		Index("idx_agent_runs_agent_id", "agent_id"),
@@ -451,9 +471,12 @@ class TeamWorkflowStatus(str, Enum):
 	FAILED = "failed"
 
 
-class TeamSessionModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+class TeamSessionModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 	__tablename__ = "team_sessions"
-	__table_args__ = (Index("idx_team_sessions_external_id", "external_session_id"),)
+	__table_args__ = (
+		Index("idx_team_sessions_external_id", "external_session_id"),
+		UniqueConstraint("tenant_id", "external_session_id", name="uq_team_sessions_tenant_external_id"),
+	)
 
 	external_session_id: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
 	name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -470,7 +493,7 @@ class TeamSessionModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	memory_entries: Mapped[list["TeamMemoryModel"]] = relationship(back_populates="team_session", cascade="all, delete-orphan")
 
 
-class TeamWorkflowModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class TeamWorkflowModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	__tablename__ = "team_workflows"
 	__table_args__ = (
 		Index("idx_team_workflows_session_id", "team_session_id"),
@@ -515,7 +538,7 @@ class TeamWorkflowStepModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	workflow: Mapped["TeamWorkflowModel"] = relationship(back_populates="steps")
 
 
-class TeamMemoryModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+class TeamMemoryModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	__tablename__ = "team_memory"
 	__table_args__ = (
 		Index("idx_team_memory_session_id", "team_session_id"),

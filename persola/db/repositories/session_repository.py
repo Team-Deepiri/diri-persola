@@ -11,11 +11,17 @@ from .base import BaseRepository
 
 
 class SessionRepository(BaseRepository[SessionModel]):
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(session, SessionModel)
+    def __init__(
+        self,
+        session: AsyncSession,
+        tenant_id: UUID | None = None,
+    ) -> None:
+        super().__init__(session, SessionModel, tenant_id=tenant_id)
 
     async def get_by_session_id(self, session_id: str) -> SessionModel | None:
-        query = select(SessionModel).where(SessionModel.session_id == session_id)
+        query = self._tenant_filter(
+            select(SessionModel).where(SessionModel.session_id == session_id)
+        )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
@@ -37,6 +43,8 @@ class SessionRepository(BaseRepository[SessionModel]):
         await self.session.flush()
 
     async def list_by_agent(self, agent_id: UUID) -> list[SessionModel]:
-        query = select(SessionModel).where(SessionModel.agent_id == agent_id)
+        query = self._tenant_filter(
+            select(SessionModel).where(SessionModel.agent_id == agent_id)
+        )
         result = await self.session.execute(query)
         return list(result.scalars().all())

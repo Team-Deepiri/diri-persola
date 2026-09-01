@@ -19,29 +19,32 @@ async def build_team_registry(
     *,
     db: Optional[AsyncSession] = None,
     agent_id: Optional[UUID] = None,
+    tenant_id: Optional[str] = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     executor = ParallelToolExecutor()
 
     async def _store(**kwargs: Any) -> Dict[str, Any]:
         key, value = kwargs["key"], kwargs["value"]
-        await REDIS_TEAM_MEMORY.store(session_id, key, value, source_role=kwargs.get("source_role", "tool"))
-        memory_store_tool(session_id, key, str(value))
+        await REDIS_TEAM_MEMORY.store(
+            session_id, key, value, tenant_id=tenant_id, source_role=kwargs.get("source_role", "tool")
+        )
+        memory_store_tool(session_id, key, str(value), tenant_id=tenant_id)
         return {"stored": True, "key": key}
 
     async def _recall(**kwargs: Any) -> Dict[str, Any]:
         key = kwargs["key"]
-        redis_val = await REDIS_TEAM_MEMORY.recall(session_id, key)
+        redis_val = await REDIS_TEAM_MEMORY.recall(session_id, key, tenant_id=tenant_id)
         if redis_val is not None:
             return {"key": key, "value": redis_val, "found": True, "source": "redis"}
-        return memory_recall_tool(session_id, key)
+        return memory_recall_tool(session_id, key, tenant_id=tenant_id)
 
     async def _search(**kwargs: Any) -> Dict[str, Any]:
         query = kwargs["query"]
-        redis_hits = await REDIS_TEAM_MEMORY.search(session_id, query)
+        redis_hits = await REDIS_TEAM_MEMORY.search(session_id, query, tenant_id=tenant_id)
         if redis_hits:
             return {"query": query, "results": redis_hits, "source": "redis"}
-        return memory_search_tool(session_id, query)
+        return memory_search_tool(session_id, query, tenant_id=tenant_id)
 
     async def _persona_blend_preview(**kwargs: Any) -> Dict[str, Any]:
         from ..engine import PersonaEngine

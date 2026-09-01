@@ -78,19 +78,19 @@ class ToolRegistry:
         return [r if r is not None else {"name": "unknown", "error": "missing"} for r in results]
 
 
-def build_default_registry(session_id: str) -> ToolRegistry:
+def build_default_registry(session_id: str, tenant_id: str | None = None) -> ToolRegistry:
     from .memory import memory_recall_tool, memory_search_tool, memory_store_tool
 
     registry = ToolRegistry()
 
     async def _store(**kwargs: Any) -> Dict[str, Any]:
-        return memory_store_tool(session_id, kwargs["key"], kwargs["value"])
+        return memory_store_tool(session_id, kwargs["key"], kwargs["value"], tenant_id=tenant_id)
 
     async def _recall(**kwargs: Any) -> Dict[str, Any]:
-        return memory_recall_tool(session_id, kwargs["key"])
+        return memory_recall_tool(session_id, kwargs["key"], tenant_id=tenant_id)
 
     async def _search(**kwargs: Any) -> Dict[str, Any]:
-        return memory_search_tool(session_id, kwargs["query"])
+        return memory_search_tool(session_id, kwargs["query"], tenant_id=tenant_id)
 
     async def _echo(**kwargs: Any) -> Dict[str, Any]:
         return {"echo": kwargs.get("text", "")}

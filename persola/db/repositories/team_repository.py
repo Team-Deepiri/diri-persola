@@ -12,16 +12,24 @@ from .base import BaseRepository
 
 
 class TeamSessionRepository(BaseRepository[TeamSessionModel]):
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(session, TeamSessionModel)
+    def __init__(
+        self,
+        session: AsyncSession,
+        tenant_id: UUID | None = None,
+    ) -> None:
+        super().__init__(session, TeamSessionModel, tenant_id=tenant_id)
 
     async def get_by_external_id(self, external_session_id: str) -> TeamSessionModel | None:
-        query = select(TeamSessionModel).where(TeamSessionModel.external_session_id == external_session_id)
+        query = self._tenant_filter(
+            select(TeamSessionModel).where(
+                TeamSessionModel.external_session_id == external_session_id
+            )
+        )
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
     async def get_with_workflows(self, external_session_id: str) -> TeamSessionModel | None:
-        query = (
+        query = self._tenant_filter(
             select(TeamSessionModel)
             .where(TeamSessionModel.external_session_id == external_session_id)
             .options(selectinload(TeamSessionModel.workflows).selectinload(TeamWorkflowModel.steps))
@@ -30,7 +38,9 @@ class TeamSessionRepository(BaseRepository[TeamSessionModel]):
         return result.scalar_one_or_none()
 
     async def list_recent(self, limit: int = 25) -> list[TeamSessionModel]:
-        query = select(TeamSessionModel).order_by(TeamSessionModel.updated_at.desc()).limit(limit)
+        query = self._tenant_filter(
+            select(TeamSessionModel).order_by(TeamSessionModel.updated_at.desc()).limit(limit)
+        )
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
@@ -43,11 +53,15 @@ class TeamSessionRepository(BaseRepository[TeamSessionModel]):
 
 
 class TeamWorkflowRepository(BaseRepository[TeamWorkflowModel]):
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(session, TeamWorkflowModel)
+    def __init__(
+        self,
+        session: AsyncSession,
+        tenant_id: UUID | None = None,
+    ) -> None:
+        super().__init__(session, TeamWorkflowModel, tenant_id=tenant_id)
 
     async def list_for_session(self, team_session_id: UUID, limit: int = 20) -> list[TeamWorkflowModel]:
-        query = (
+        query = self._tenant_filter(
             select(TeamWorkflowModel)
             .where(TeamWorkflowModel.team_session_id == team_session_id)
             .options(selectinload(TeamWorkflowModel.steps))
@@ -58,7 +72,7 @@ class TeamWorkflowRepository(BaseRepository[TeamWorkflowModel]):
         return list(result.scalars().all())
 
     async def get_with_steps(self, workflow_id: UUID) -> TeamWorkflowModel | None:
-        query = (
+        query = self._tenant_filter(
             select(TeamWorkflowModel)
             .where(TeamWorkflowModel.id == workflow_id)
             .options(selectinload(TeamWorkflowModel.steps))
@@ -90,11 +104,15 @@ class TeamWorkflowRepository(BaseRepository[TeamWorkflowModel]):
 
 
 class TeamMemoryRepository(BaseRepository[TeamMemoryModel]):
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(session, TeamMemoryModel)
+    def __init__(
+        self,
+        session: AsyncSession,
+        tenant_id: UUID | None = None,
+    ) -> None:
+        super().__init__(session, TeamMemoryModel, tenant_id=tenant_id)
 
     async def list_for_session(self, team_session_id: UUID, limit: int = 100) -> list[TeamMemoryModel]:
-        query = (
+        query = self._tenant_filter(
             select(TeamMemoryModel)
             .where(TeamMemoryModel.team_session_id == team_session_id)
             .order_by(TeamMemoryModel.created_at.desc())
@@ -112,9 +130,11 @@ class TeamMemoryRepository(BaseRepository[TeamMemoryModel]):
         tags: list[str] | None = None,
         source_role: str | None = None,
     ) -> TeamMemoryModel:
-        query = select(TeamMemoryModel).where(
-            TeamMemoryModel.team_session_id == team_session_id,
-            TeamMemoryModel.memory_key == memory_key,
+        query = self._tenant_filter(
+            select(TeamMemoryModel).where(
+                TeamMemoryModel.team_session_id == team_session_id,
+                TeamMemoryModel.memory_key == memory_key,
+            )
         )
         result = await self.session.execute(query)
         existing = result.scalar_one_or_none()

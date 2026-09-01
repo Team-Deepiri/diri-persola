@@ -9,8 +9,8 @@ from ..repositories import AgentRepository
 
 
 class AgentService:
-    def __init__(self, session: AsyncSession) -> None:
-        self.repository = AgentRepository(session)
+    def __init__(self, session: AsyncSession, tenant_id: UUID | None = None) -> None:
+        self.repository = AgentRepository(session, tenant_id=tenant_id)
 
     async def get(self, agent_id: UUID) -> AgentModel | None:
         return await self.repository.get(agent_id)

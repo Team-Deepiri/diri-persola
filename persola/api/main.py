@@ -56,7 +56,7 @@ from ..models import (
     PresetName,
 )
 from ..db.database import check_db_health, close_db, get_db, init_db
-from ..db.models import AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel, SessionModel
+from ..db.models import DEFAULT_TENANT, AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel, SessionModel
 from ..db.repositories import (
     AgentRepository,
     AgentRunRepository,
@@ -68,7 +68,7 @@ from ..db.repositories import (
     SessionRepository,
 )
 from ..db.services import PersonaService
-from ..auth import APIKeyAuth
+from ..auth import APIKeyAuth, get_request_tenant_id
 from ..metrics import (
     MetricsMiddleware,
     metrics_endpoint,
@@ -94,7 +94,7 @@ async def lifespan(application: FastAPI):
 
     # Seed presets once at startup (idempotent)
     async for db in get_db():
-        repo = PersonaRepository(db)
+        repo = PersonaRepository(db, tenant_id=DEFAULT_TENANT)
         await repo.seed_presets(DEFAULT_PRESETS)
         # Seed the default org chart so GET /org-chart stays a pure read.
         from ..orchestration.org_chart import GLOBAL_ORG_CHART
@@ -239,8 +239,9 @@ async def _record_analysis_run(
     confidence: float,
     notes: str,
     persona_id: UUID | None = None,
+    tenant_id: UUID | None = None,
 ) -> None:
-    repo = AnalysisRunRepository(db)
+    repo = AnalysisRunRepository(db, tenant_id=tenant_id)
     await repo.create(
         AnalysisRunModel(
             persona_id=persona_id,
@@ -350,14 +351,19 @@ async def _run_style_analysis(text: str) -> tuple[dict[str, float], float, str]:
 
 @app.post("/api/v1/analysis/extract", response_model=AnalysisExtractResponse)
 @limiter.limit("10/minute")
-async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: AsyncSession = Depends(get_db)):
+async def extract_analysis(
+    request: Request,
+    body: AnalysisExtractRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
     knobs, confidence, notes = await _run_style_analysis(body.text)
     persona_id: str | None = None
     persona_uuid: UUID | None = None
 
     if body.create_persona:
         persona_name = body.persona_name or "Writing Style Persona"
-        repo = PersonaRepository(db)
+        repo = PersonaRepository(db, tenant_id=tenant_id)
         persona = _build_persona_from_knobs(persona_name, knobs, notes)
         created = await repo.create(_to_persona_model(persona))
         await _record_persona_version(db, created, source="analysis", summary="Persona created from writing analysis")
@@ -371,6 +377,7 @@ async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: A
         confidence=confidence,
         notes=notes,
         persona_id=persona_uuid,
+        tenant_id=tenant_id,
     )
     await db.commit()
 
@@ -383,9 +390,13 @@ async def extract_analysis(request: Request, body: AnalysisExtractRequest, db: A
 
 
 @app.post("/api/v1/analysis/extract-and-create", response_model=PersonaProfile)
-async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSession = Depends(get_db)):
+async def extract_and_create_persona(
+    request: AnalysisCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
     knobs, confidence, notes = await _run_style_analysis(request.text)
-    repo = PersonaRepository(db)
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     persona = _build_persona_from_knobs(request.name, knobs, notes)
     created = await repo.create(_to_persona_model(persona))
     await _record_persona_version(db, created, source="analysis", summary="Persona created from writing analysis")
@@ -396,6 +407,7 @@ async def extract_and_create_persona(request: AnalysisCreateRequest, db: AsyncSe
         confidence=confidence,
         notes=notes,
         persona_id=created.id,
+        tenant_id=tenant_id,
     )
     await db.commit()
     return _to_persona_profile(created)
@@ -406,8 +418,12 @@ class ClonePersonaRequest(BaseModel):
 
 
 @app.post("/api/v1/personas", response_model=PersonaProfile)
-async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def create_persona(
+    persona: PersonaProfile,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     # Ensure ID exists if upstream doesn't provide one
     if not getattr(persona, "id", None):
         persona.id = f"persona_{uuid.uuid4().hex[:8]}"
@@ -422,28 +438,39 @@ async def create_persona(persona: PersonaProfile, db: AsyncSession = Depends(get
 
     await db.commit()
     log.info("persona.created", persona_id=str(created.id), name=created.name)
-    personas = await PersonaRepository(db).count()
+    personas = await PersonaRepository(db, tenant_id=tenant_id).count()
     set_personas_total(personas)
     return _to_persona_profile(created)
 
 
 @app.get("/api/v1/personas", response_model=List[PersonaProfile])
-async def list_personas(db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def list_personas(
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     personas = await repo.list(limit=1000)
     return [_to_persona_profile(item) for item in personas]
 
 
 @app.get("/api/v1/personas/search", response_model=List[PersonaProfile])
-async def search_personas(q: str, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def search_personas(
+    q: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     personas = await repo.search(q)
     return [_to_persona_profile(item) for item in personas]
 
 
 @app.post("/api/v1/personas/import", response_model=PersonaProfile)
-async def import_persona(persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def import_persona(
+    persona: PersonaProfile,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     imported = persona.model_copy(deep=True)
     imported.id = str(uuid.uuid4())
     created = await repo.create(_to_persona_model(imported))
@@ -453,8 +480,12 @@ async def import_persona(persona: PersonaProfile, db: AsyncSession = Depends(get
 
 
 @app.get("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
-async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def get_persona(
+    persona_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     persona = await repo.get(UUID(persona_id))
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
@@ -462,8 +493,13 @@ async def get_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/v1/personas/{persona_id}/clone", response_model=PersonaProfile)
-async def clone_persona(persona_id: str, request: ClonePersonaRequest, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def clone_persona(
+    persona_id: str,
+    request: ClonePersonaRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     try:
         cloned = await repo.clone(UUID(persona_id), request.name)
     except ValueError:
@@ -475,8 +511,13 @@ async def clone_persona(persona_id: str, request: ClonePersonaRequest, db: Async
 
 
 @app.put("/api/v1/personas/{persona_id}", response_model=PersonaProfile)
-async def update_persona(persona_id: str, persona: PersonaProfile, db: AsyncSession = Depends(get_db)):
-    service = PersonaService(db)
+async def update_persona(
+    persona_id: str,
+    persona: PersonaProfile,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    service = PersonaService(db, tenant_id=tenant_id)
     updates = {
         "name": persona.name,
         "description": persona.description,
@@ -520,8 +561,12 @@ async def update_persona(persona_id: str, persona: PersonaProfile, db: AsyncSess
 
 
 @app.delete("/api/v1/personas/{persona_id}")
-async def delete_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def delete_persona(
+    persona_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     deleted = await repo.delete(UUID(persona_id))
     if not deleted:
         raise HTTPException(status_code=404, detail="Persona not found")
@@ -547,9 +592,13 @@ class BlendPreviewRequest(BaseModel):
 
 
 @app.post("/api/v1/personas/blend/preview", response_model=PersonaProfile)
-async def preview_blend(request: BlendPreviewRequest, db: AsyncSession = Depends(get_db)):
+async def preview_blend(
+    request: BlendPreviewRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
     """Preview a blend without saving to DB."""
-    repo = PersonaRepository(db)
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     
     if len(request.persona_ids) != len(request.weights):
         raise HTTPException(status_code=400, detail="Number of persona_ids must equal number of weights")
@@ -572,8 +621,12 @@ async def preview_blend(request: BlendPreviewRequest, db: AsyncSession = Depends
 
 
 @app.post("/api/v1/personas/blend", response_model=PersonaProfile)
-async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def blend_personas(
+    request: BlendRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     
     # Handle new multi-persona format
     if request.persona_ids is not None:
@@ -632,8 +685,12 @@ async def blend_personas(request: BlendRequest, db: AsyncSession = Depends(get_d
 
 
 @app.get("/api/v1/personas/{persona_id}/system-prompt")
-async def get_system_prompt(persona_id: str, db: AsyncSession = Depends(get_db)):
-    service = PersonaService(db)
+async def get_system_prompt(
+    persona_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    service = PersonaService(db, tenant_id=tenant_id)
     prompt = await service.get_system_prompt(UUID(persona_id))
     if prompt is None:
         raise HTTPException(status_code=404, detail="Persona not found")
@@ -641,8 +698,12 @@ async def get_system_prompt(persona_id: str, db: AsyncSession = Depends(get_db))
 
 
 @app.get("/api/v1/personas/{persona_id}/sampling")
-async def get_sampling_params(persona_id: str, db: AsyncSession = Depends(get_db)):
-    service = PersonaService(db)
+async def get_sampling_params(
+    persona_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    service = PersonaService(db, tenant_id=tenant_id)
     params = await service.get_sampling_params(UUID(persona_id))
     if params is None:
         raise HTTPException(status_code=404, detail="Persona not found")
@@ -650,8 +711,12 @@ async def get_sampling_params(persona_id: str, db: AsyncSession = Depends(get_db
 
 
 @app.get("/api/v1/personas/{persona_id}/export")
-async def export_persona(persona_id: str, db: AsyncSession = Depends(get_db)):
-    repo = PersonaRepository(db)
+async def export_persona(
+    persona_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = PersonaRepository(db, tenant_id=tenant_id)
     persona = await repo.get(UUID(persona_id))
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
@@ -681,8 +746,13 @@ class ApplyPresetRequest(BaseModel):
 
 
 @app.post("/api/v1/presets/{preset}/apply")
-async def apply_preset(preset: PresetName, request: ApplyPresetRequest, db: AsyncSession = Depends(get_db)):
-    service = PersonaService(db)
+async def apply_preset(
+    preset: PresetName,
+    request: ApplyPresetRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    service = PersonaService(db, tenant_id=tenant_id)
     existing = await service.get(UUID(request.persona_id))
     if existing is None:
         raise HTTPException(status_code=404, detail="Persona not found")
@@ -703,9 +773,13 @@ async def apply_preset(preset: PresetName, request: ApplyPresetRequest, db: Asyn
 
 
 @app.post("/api/v1/agents", response_model=AgentConfig)
-async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
-    agent_repo = AgentRepository(db)
-    persona_repo = PersonaRepository(db)
+async def create_agent(
+    agent: AgentConfig,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    agent_repo = AgentRepository(db, tenant_id=tenant_id)
+    persona_repo = PersonaRepository(db, tenant_id=tenant_id)
 
     model = _to_agent_model(agent)
 
@@ -730,15 +804,22 @@ async def create_agent(agent: AgentConfig, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/agents", response_model=List[AgentConfig])
-async def list_agents(db: AsyncSession = Depends(get_db)):
-    repo = AgentRepository(db)
+async def list_agents(
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = AgentRepository(db, tenant_id=tenant_id)
     agents = await repo.list(limit=1000)
     return [_to_agent_config(item) for item in agents]
 
 
 @app.get("/api/v1/agents/{agent_id}", response_model=AgentConfig)
-async def get_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
-    repo = AgentRepository(db)
+async def get_agent(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = AgentRepository(db, tenant_id=tenant_id)
     agent = await repo.get(UUID(agent_id))
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -746,8 +827,13 @@ async def get_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.put("/api/v1/agents/{agent_id}", response_model=AgentConfig)
-async def update_agent(agent_id: str, agent: AgentConfig, db: AsyncSession = Depends(get_db)):
-    repo = AgentRepository(db)
+async def update_agent(
+    agent_id: str,
+    agent: AgentConfig,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = AgentRepository(db, tenant_id=tenant_id)
     existing = await repo.get(UUID(agent_id))
     if existing is None:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -765,7 +851,7 @@ async def update_agent(agent_id: str, agent: AgentConfig, db: AsyncSession = Dep
     }
 
     if agent.persona_id:
-        persona_repo = PersonaRepository(db)
+        persona_repo = PersonaRepository(db, tenant_id=tenant_id)
         persona = await persona_repo.get(UUID(agent.persona_id))
         if persona is not None:
             update_data["system_prompt"] = engine.build_system_prompt(_to_persona_profile(persona))
@@ -777,8 +863,12 @@ async def update_agent(agent_id: str, agent: AgentConfig, db: AsyncSession = Dep
 
 
 @app.delete("/api/v1/agents/{agent_id}", status_code=204)
-async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
-    repo = AgentRepository(db)
+async def delete_agent(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    repo = AgentRepository(db, tenant_id=tenant_id)
     deleted = await repo.delete(UUID(agent_id))
     if not deleted:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -788,8 +878,12 @@ async def delete_agent(agent_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/api/v1/agents/{agent_id}/sessions")
-async def list_agent_sessions(agent_id: str, db: AsyncSession = Depends(get_db)):
-    session_repo = SessionRepository(db)
+async def list_agent_sessions(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    session_repo = SessionRepository(db, tenant_id=tenant_id)
     sessions = await session_repo.list_by_agent(UUID(agent_id))
     return [
         {
@@ -806,9 +900,13 @@ async def list_agent_sessions(agent_id: str, db: AsyncSession = Depends(get_db))
 
 
 @app.get("/api/v1/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, db: AsyncSession = Depends(get_db)):
-    session_repo = SessionRepository(db)
-    message_repo = MessageRepository(db)
+async def get_session_messages(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    session_repo = SessionRepository(db, tenant_id=tenant_id)
+    message_repo = MessageRepository(db, tenant_id=tenant_id)
 
     session = await session_repo.get_by_session_id(session_id)
     if session is None:
@@ -842,14 +940,18 @@ class MessageAppendRequest(BaseModel):
 
 
 @app.post("/api/v1/sessions", status_code=201)
-async def create_session(body: SessionCreateRequest, db: AsyncSession = Depends(get_db)):
-    agent_repo = AgentRepository(db)
+async def create_session(
+    body: SessionCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    agent_repo = AgentRepository(db, tenant_id=tenant_id)
     agent = await agent_repo.get(UUID(body.agent_id))
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
 
     sid = body.session_id or str(uuid.uuid4())
-    session_repo = SessionRepository(db)
+    session_repo = SessionRepository(db, tenant_id=tenant_id)
 
     existing = await session_repo.get_by_session_id(sid)
     if existing is not None:
@@ -870,9 +972,14 @@ async def create_session(body: SessionCreateRequest, db: AsyncSession = Depends(
 
 
 @app.post("/api/v1/sessions/{session_id}/messages", status_code=201)
-async def append_message(session_id: str, body: MessageAppendRequest, db: AsyncSession = Depends(get_db)):
-    session_repo = SessionRepository(db)
-    message_repo = MessageRepository(db)
+async def append_message(
+    session_id: str,
+    body: MessageAppendRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    session_repo = SessionRepository(db, tenant_id=tenant_id)
+    message_repo = MessageRepository(db, tenant_id=tenant_id)
 
     session = await session_repo.get_by_session_id(session_id)
     if session is None:
@@ -891,8 +998,12 @@ async def append_message(session_id: str, body: MessageAppendRequest, db: AsyncS
 
 
 @app.delete("/api/v1/sessions/{session_id}", status_code=204)
-async def delete_session(session_id: str, db: AsyncSession = Depends(get_db)):
-    session_repo = SessionRepository(db)
+async def delete_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    session_repo = SessionRepository(db, tenant_id=tenant_id)
     session = await session_repo.get_by_session_id(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -991,10 +1102,14 @@ async def list_cyrex_agents(db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/v1/cyrex/sync/{persona_id}")
-async def sync_persona_to_cyrex(persona_id: str, db: AsyncSession = Depends(get_db)):
+async def sync_persona_to_cyrex(
+    persona_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
     _require_cyrex_configured()
 
-    persona_repo = PersonaRepository(db)
+    persona_repo = PersonaRepository(db, tenant_id=tenant_id)
     persona = await persona_repo.get(UUID(persona_id))
     if persona is None:
         raise HTTPException(status_code=404, detail="Persona not found")
@@ -1012,10 +1127,14 @@ async def sync_persona_to_cyrex(persona_id: str, db: AsyncSession = Depends(get_
 
 
 @app.post("/api/v1/cyrex/import/{cyrex_id}", response_model=PersonaProfile)
-async def import_persona_from_cyrex(cyrex_id: str, db: AsyncSession = Depends(get_db)):
+async def import_persona_from_cyrex(
+    cyrex_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
     _require_cyrex_configured()
 
-    persona_repo = PersonaRepository(db)
+    persona_repo = PersonaRepository(db, tenant_id=tenant_id)
     try:
         profile = await cyrex_client.pull_persona(cyrex_id)
         created = await persona_repo.create(_to_persona_model(profile))
@@ -1034,13 +1153,14 @@ async def invoke_agent(
     agent_id: str,
     body: InvokeRequest,
     db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
     _rl: None = Depends(_invoke_rate_limit),
 ):
-    agent_repo = AgentRepository(db)
-    agent_run_repo = AgentRunRepository(db)
-    persona_repo = PersonaRepository(db)
-    session_repo = SessionRepository(db)
-    message_repo = MessageRepository(db)
+    agent_repo = AgentRepository(db, tenant_id=tenant_id)
+    agent_run_repo = AgentRunRepository(db, tenant_id=tenant_id)
+    persona_repo = PersonaRepository(db, tenant_id=tenant_id)
+    session_repo = SessionRepository(db, tenant_id=tenant_id)
+    message_repo = MessageRepository(db, tenant_id=tenant_id)
 
     agent = await agent_repo.get(UUID(agent_id))
     if agent is None:
