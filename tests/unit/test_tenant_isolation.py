@@ -193,10 +193,11 @@ def test_redis_team_memory_key_namespacing():
 
 
 async def test_api_persona_isolation(db_session):
+    from httpx import ASGITransport, AsyncClient
+
     from persola.api.main import app
     from persola.auth import get_request_tenant_id
     from persola.db.database import get_db
-    from httpx import ASGITransport, AsyncClient
 
     async def _override_get_db():
         yield db_session
@@ -224,3 +225,80 @@ async def test_api_persona_isolation(db_session):
         assert res.json()[0]["name"] == "Tenant A Persona"
 
     app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Work queue / org chart / audit log isolation
+# ---------------------------------------------------------------------------
+
+
+async def test_org_chart_isolation_across_tenants(db_session):
+    from persola.orchestration.org_chart import GLOBAL_ORG_CHART, OrgNode
+
+    custom_role = "custom-tenant-a-role"
+    await GLOBAL_ORG_CHART.upsert_node(
+        "default",
+        OrgNode(role=custom_role, title="Tenant A Only"),
+        session=db_session,
+        tenant_id=TENANT_A,
+    )
+    await db_session.commit()
+
+    # Each tenant gets its own seeded chart, so a tenant-A-only custom role must
+    # never appear in tenant B's chart.
+    chart_b = await GLOBAL_ORG_CHART.to_dict("default", session=db_session, tenant_id=TENANT_B)
+    assert custom_role not in {node["role"] for node in chart_b["nodes"]}
+
+    chart_a = await GLOBAL_ORG_CHART.to_dict("default", session=db_session, tenant_id=TENANT_A)
+    roles_a = {node["role"] for node in chart_a["nodes"]}
+    assert custom_role in roles_a
+
+
+async def test_task_queue_isolation_across_tenants(db_session):
+    from persola.orchestration.task_queue import GLOBAL_TASK_QUEUE
+
+    await GLOBAL_TASK_QUEUE.enqueue(
+        team_id="default",
+        role="executor",
+        subtask="private subtask for A",
+        origin="user",
+        session_id="sess-a",
+        tenant_id=TENANT_A,
+        session=db_session,
+    )
+    await db_session.commit()
+
+    board_b = await GLOBAL_TASK_QUEUE.board("default", session=db_session, tenant_id=TENANT_B)
+    assert all(col == [] for col in board_b.values())
+
+    board_a = await GLOBAL_TASK_QUEUE.board("default", session=db_session, tenant_id=TENANT_A)
+    subtasks = [t["subtask"] for col in board_a.values() for t in col]
+    assert "private subtask for A" in subtasks
+
+
+async def test_audit_log_isolation_across_tenants(db_session):
+    from persola.db.models import AuditEventType
+    from persola.orchestration.audit_log import GLOBAL_AUDIT_LOG
+
+    await GLOBAL_AUDIT_LOG.record(
+        team_id="default",
+        event_type=AuditEventType.INSTRUCTION,
+        actor="user",
+        recipient="coordinator",
+        summary="secret event for A",
+        session_id="sess-a",
+        tenant_id=TENANT_A,
+        session=db_session,
+    )
+    await db_session.commit()
+
+    timeline_b = await GLOBAL_AUDIT_LOG.timeline(
+        "default", session=db_session, tenant_id=TENANT_B
+    )
+    assert timeline_b == []
+
+    timeline_a = await GLOBAL_AUDIT_LOG.timeline(
+        "default", session=db_session, tenant_id=TENANT_A
+    )
+    assert len(timeline_a) == 1
+    assert timeline_a[0]["summary"] == "secret event for A"

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any
 from uuid import uuid4
+
+from ..utils.time import utcnow
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return utcnow()
 
 
 @dataclass
@@ -18,20 +20,20 @@ class WorkflowStepRecord:
     role: str
     task: str
     output: str
-    tool_calls: List[Dict[str, Any]] = field(default_factory=list)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
     started_at: datetime = field(default_factory=_utcnow)
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
 
 
 @dataclass
 class WorkflowState:
     workflow_id: str = field(default_factory=lambda: str(uuid4()))
     goal: str = ""
-    steps: List[WorkflowStepRecord] = field(default_factory=list)
-    context: Dict[str, Any] = field(default_factory=dict)
+    steps: list[WorkflowStepRecord] = field(default_factory=list)
+    context: dict[str, Any] = field(default_factory=dict)
     status: str = "pending"
 
-    def add_step(self, role: str, task: str, output: str, tool_calls: Optional[List[Dict[str, Any]]] = None) -> None:
+    def add_step(self, role: str, task: str, output: str, tool_calls: list[dict[str, Any]] | None = None) -> None:
         self.steps.append(
             WorkflowStepRecord(
                 step_id=str(uuid4()),
@@ -51,7 +53,7 @@ class WorkflowState:
         self.context["error"] = reason
         self.status = "failed"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "workflow_id": self.workflow_id,
             "goal": self.goal,
@@ -76,15 +78,15 @@ class WorkflowState:
 class TeamSessionState:
     session_id: str = field(default_factory=lambda: str(uuid4()))
     team_id: str = ""
-    messages: List[Dict[str, str]] = field(default_factory=list)
-    memory_snapshot: Dict[str, Any] = field(default_factory=dict)
-    active_workflow: Optional[WorkflowState] = None
+    messages: list[dict[str, str]] = field(default_factory=list)
+    memory_snapshot: dict[str, Any] = field(default_factory=dict)
+    active_workflow: WorkflowState | None = None
     created_at: datetime = field(default_factory=_utcnow)
 
     def append_message(self, role: str, content: str) -> None:
         self.messages.append({"role": role, "content": content})
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
             "team_id": self.team_id,

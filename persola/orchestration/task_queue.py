@@ -17,41 +17,44 @@ cloud queue.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-from uuid import uuid4
+from datetime import datetime
+from typing import Any
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import WorkTaskStatus as TaskStatus
 from ..db.repositories.workqueue_repository import WorkTaskRepository
+from ..utils.time import utcnow
 from ._session_store import SessionFactoryMixin
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return utcnow()
 
 
 @dataclass
 class AgentTask:
     task_id: str = field(default_factory=lambda: str(uuid4()))
     team_id: str = "default"
+    tenant_id: UUID | None = None
     role: str = "coordinator"  # who this is assigned to, per the org chart
     subtask: str = ""
     origin: str = "user"  # "user" | role that delegated it | "schedule"
     status: TaskStatus = TaskStatus.QUEUED
-    result: Optional[str] = None
-    error: Optional[str] = None
-    parent_task_id: Optional[str] = None
-    session_id: Optional[str] = None
+    result: str | None = None
+    error: str | None = None
+    parent_task_id: str | None = None
+    session_id: str | None = None
     created_at: datetime = field(default_factory=_utcnow)
-    claimed_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    claimed_at: datetime | None = None
+    completed_at: datetime | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "task_id": self.task_id,
             "team_id": self.team_id,
+            "tenant_id": str(self.tenant_id) if self.tenant_id else None,
             "role": self.role,
             "subtask": self.subtask,
             "origin": self.origin,
@@ -70,6 +73,7 @@ def _hydrate_task(row: Any) -> AgentTask:
     return AgentTask(
         task_id=row.task_id,
         team_id=row.team_id,
+        tenant_id=row.tenant_id if hasattr(row, "tenant_id") else None,
         role=row.role,
         subtask=row.subtask,
         origin=row.origin,
@@ -101,12 +105,14 @@ class AgentTaskQueue(SessionFactoryMixin):
         role: str,
         subtask: str,
         origin: str = "user",
-        parent_task_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        session: Optional[AsyncSession] = None,
+        parent_task_id: str | None = None,
+        session_id: str | None = None,
+        tenant_id: UUID | None = None,
+        session: AsyncSession | None = None,
     ) -> AgentTask:
         task = AgentTask(
             team_id=team_id,
+            tenant_id=tenant_id,
             role=role,
             subtask=subtask,
             origin=origin,
@@ -115,7 +121,7 @@ class AgentTaskQueue(SessionFactoryMixin):
         )
 
         async def _op(s: AsyncSession) -> AgentTask:
-            repo = WorkTaskRepository(s)
+            repo = WorkTaskRepository(s, tenant_id=tenant_id)
             await repo.create_task(
                 task_id=task.task_id,
                 team_id=task.team_id,
@@ -134,40 +140,41 @@ class AgentTaskQueue(SessionFactoryMixin):
         self,
         *,
         team_id: str,
-        role: Optional[str] = None,
-        session: Optional[AsyncSession] = None,
-    ) -> Optional[AgentTask]:
+        role: str | None = None,
+        tenant_id: UUID | None = None,
+        session: AsyncSession | None = None,
+    ) -> AgentTask | None:
         """Autonomous pickup: the next queued task for this team (optionally a specific role)."""
 
-        async def _op(s: AsyncSession) -> Optional[AgentTask]:
-            repo = WorkTaskRepository(s)
+        async def _op(s: AsyncSession) -> AgentTask | None:
+            repo = WorkTaskRepository(s, tenant_id=tenant_id)
             row = await repo.claim_next(team_id, role)
             return _hydrate_task(row) if row is not None else None
 
         return await self._run(session, _op, commit=True)
 
     async def mark_in_progress(
-        self, task_id: str, *, session: Optional[AsyncSession] = None
-    ) -> Optional[AgentTask]:
-        return await self._set_status(task_id, TaskStatus.IN_PROGRESS, session=session)
+        self, task_id: str, *, tenant_id: UUID | None = None, session: AsyncSession | None = None
+    ) -> AgentTask | None:
+        return await self._set_status(task_id, TaskStatus.IN_PROGRESS, tenant_id=tenant_id, session=session)
 
     async def block(
-        self, task_id: str, reason: str, *, session: Optional[AsyncSession] = None
-    ) -> Optional[AgentTask]:
-        return await self._set_status(task_id, TaskStatus.BLOCKED, error=reason, session=session)
+        self, task_id: str, reason: str, *, tenant_id: UUID | None = None, session: AsyncSession | None = None
+    ) -> AgentTask | None:
+        return await self._set_status(task_id, TaskStatus.BLOCKED, error=reason, tenant_id=tenant_id, session=session)
 
     async def complete(
-        self, task_id: str, result: str, *, session: Optional[AsyncSession] = None
-    ) -> Optional[AgentTask]:
+        self, task_id: str, result: str, *, tenant_id: UUID | None = None, session: AsyncSession | None = None
+    ) -> AgentTask | None:
         return await self._set_status(
-            task_id, TaskStatus.DONE, result=result, mark_completed=True, session=session
+            task_id, TaskStatus.DONE, result=result, mark_completed=True, tenant_id=tenant_id, session=session
         )
 
     async def fail(
-        self, task_id: str, error: str, *, session: Optional[AsyncSession] = None
-    ) -> Optional[AgentTask]:
+        self, task_id: str, error: str, *, tenant_id: UUID | None = None, session: AsyncSession | None = None
+    ) -> AgentTask | None:
         return await self._set_status(
-            task_id, TaskStatus.FAILED, error=error, mark_completed=True, session=session
+            task_id, TaskStatus.FAILED, error=error, mark_completed=True, tenant_id=tenant_id, session=session
         )
 
     async def _set_status(
@@ -175,13 +182,14 @@ class AgentTaskQueue(SessionFactoryMixin):
         task_id: str,
         status: TaskStatus,
         *,
-        result: Optional[str] = None,
-        error: Optional[str] = None,
+        result: str | None = None,
+        error: str | None = None,
         mark_completed: bool = False,
-        session: Optional[AsyncSession] = None,
-    ) -> Optional[AgentTask]:
-        async def _op(s: AsyncSession) -> Optional[AgentTask]:
-            repo = WorkTaskRepository(s)
+        tenant_id: UUID | None = None,
+        session: AsyncSession | None = None,
+    ) -> AgentTask | None:
+        async def _op(s: AsyncSession) -> AgentTask | None:
+            repo = WorkTaskRepository(s, tenant_id=tenant_id)
             row = await repo.update_status(
                 task_id,
                 status.value,
@@ -194,23 +202,23 @@ class AgentTaskQueue(SessionFactoryMixin):
         return await self._run(session, _op, commit=True)
 
     async def get(
-        self, task_id: str, *, session: Optional[AsyncSession] = None
-    ) -> Optional[AgentTask]:
-        async def _op(s: AsyncSession) -> Optional[AgentTask]:
-            repo = WorkTaskRepository(s)
+        self, task_id: str, *, tenant_id: UUID | None = None, session: AsyncSession | None = None
+    ) -> AgentTask | None:
+        async def _op(s: AsyncSession) -> AgentTask | None:
+            repo = WorkTaskRepository(s, tenant_id=tenant_id)
             row = await repo.get_by_task_id(task_id)
             return _hydrate_task(row) if row is not None else None
 
         return await self._run(session, _op, commit=False)
 
     async def board(
-        self, team_id: str, *, session: Optional[AsyncSession] = None
-    ) -> Dict[str, List[Dict[str, Any]]]:
+        self, team_id: str, *, tenant_id: UUID | None = None, session: AsyncSession | None = None
+    ) -> dict[str, list[dict[str, Any]]]:
         """Kanban view: tasks grouped by column, newest first within each column."""
-        async def _op(s: AsyncSession) -> Dict[str, List[Dict[str, Any]]]:
-            repo = WorkTaskRepository(s)
+        async def _op(s: AsyncSession) -> dict[str, list[dict[str, Any]]]:
+            repo = WorkTaskRepository(s, tenant_id=tenant_id)
             tasks = [_hydrate_task(row) for row in await repo.list_for_team(team_id)]
-            columns: Dict[str, List[Dict[str, Any]]] = {status.value: [] for status in TaskStatus}
+            columns: dict[str, list[dict[str, Any]]] = {status.value: [] for status in TaskStatus}
             for task in sorted(tasks, key=lambda t: t.created_at, reverse=True):
                 columns[task.status.value].append(task.to_dict())
             return columns
@@ -218,10 +226,10 @@ class AgentTaskQueue(SessionFactoryMixin):
         return await self._run(session, _op, commit=False)
 
     async def children(
-        self, parent_task_id: str, *, session: Optional[AsyncSession] = None
-    ) -> List[AgentTask]:
-        async def _op(s: AsyncSession) -> List[AgentTask]:
-            repo = WorkTaskRepository(s)
+        self, parent_task_id: str, *, tenant_id: UUID | None = None, session: AsyncSession | None = None
+    ) -> list[AgentTask]:
+        async def _op(s: AsyncSession) -> list[AgentTask]:
+            repo = WorkTaskRepository(s, tenant_id=tenant_id)
             return [_hydrate_task(row) for row in await repo.children(parent_task_id)]
 
         return await self._run(session, _op, commit=False)

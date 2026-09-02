@@ -1,14 +1,27 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID as PyUUID
 from uuid import uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+	Boolean,
+	CheckConstraint,
+	DateTime,
+	Float,
+	ForeignKey,
+	Index,
+	Integer,
+	String,
+	Text,
+	UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from ..utils.time import utcnow
 
 
 class Base(DeclarativeBase):
@@ -96,7 +109,7 @@ class AuditEventType(str, Enum):
 
 
 def _utcnow() -> datetime:
-	return datetime.now(timezone.utc)
+	return utcnow()
 
 
 def _score_constraints(*field_names: str) -> list[CheckConstraint]:
@@ -189,9 +202,9 @@ class PersonaModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 	max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=2000)
 	is_preset: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
-	agents: Mapped[list["AgentModel"]] = relationship(back_populates="persona")
-	versions: Mapped[list["PersonaVersionModel"]] = relationship(back_populates="persona", cascade="all, delete-orphan")
-	analysis_runs: Mapped[list["AnalysisRunModel"]] = relationship(back_populates="persona")
+	agents: Mapped[list[AgentModel]] = relationship(back_populates="persona")
+	versions: Mapped[list[PersonaVersionModel]] = relationship(back_populates="persona", cascade="all, delete-orphan")
+	analysis_runs: Mapped[list[AnalysisRunModel]] = relationship(back_populates="persona")
 
 	def knob_values(self) -> dict[str, float]:
 		return {field_name: float(getattr(self, field_name)) for field_name in PERSONA_KNOB_FIELDS}
@@ -204,7 +217,7 @@ class PersonaModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 			"max_tokens": self.max_tokens,
 		}
 
-	def apply_profile(self, profile: "PersonaProfile") -> None:
+	def apply_profile(self, profile: PersonaProfile) -> None:
 		for field_name in PERSONA_KNOB_FIELDS:
 			setattr(self, field_name, getattr(profile, field_name))
 		self.name = profile.name
@@ -214,7 +227,7 @@ class PersonaModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 		self.temperature = profile.temperature
 		self.max_tokens = profile.max_tokens
 
-	def to_profile(self) -> "PersonaProfile":
+	def to_profile(self) -> PersonaProfile:
 		from ..models import PersonaProfile
 
 		return PersonaProfile(
@@ -231,7 +244,7 @@ class PersonaModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 		)
 
 	@classmethod
-	def from_profile(cls, profile: "PersonaProfile", *, is_preset: bool = False) -> "PersonaModel":
+	def from_profile(cls, profile: PersonaProfile, *, is_preset: bool = False) -> PersonaModel:
 		model = cls(is_preset=is_preset)
 		model.apply_profile(profile)
 		return model
@@ -262,12 +275,12 @@ class AgentModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 	memory_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 	is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-	persona: Mapped["PersonaModel | None"] = relationship(back_populates="agents")
-	sessions: Mapped[list["SessionModel"]] = relationship(back_populates="agent")
-	tool_configs: Mapped[list["AgentToolModel"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
-	runs: Mapped[list["AgentRunModel"]] = relationship(back_populates="agent", cascade="all, delete-orphan")
+	persona: Mapped[PersonaModel | None] = relationship(back_populates="agents")
+	sessions: Mapped[list[SessionModel]] = relationship(back_populates="agent")
+	tool_configs: Mapped[list[AgentToolModel]] = relationship(back_populates="agent", cascade="all, delete-orphan")
+	runs: Mapped[list[AgentRunModel]] = relationship(back_populates="agent", cascade="all, delete-orphan")
 
-	def to_config(self) -> "AgentConfig":
+	def to_config(self) -> AgentConfig:
 		from ..models import AgentConfig
 
 		# Prefer JSON tools column; avoid lazy-loading tool_configs (async-safe).
@@ -287,7 +300,7 @@ class AgentModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 		)
 
 	@classmethod
-	def from_config(cls, config: "AgentConfig") -> "AgentModel":
+	def from_config(cls, config: AgentConfig) -> AgentModel:
 		return cls(
 			name=config.name,
 			role=config.role,
@@ -320,9 +333,9 @@ class SessionModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 	last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-	agent: Mapped["AgentModel"] = relationship(back_populates="sessions")
-	messages: Mapped[list["MessageModel"]] = relationship(back_populates="session")
-	runs: Mapped[list["AgentRunModel"]] = relationship(back_populates="session")
+	agent: Mapped[AgentModel] = relationship(back_populates="sessions")
+	messages: Mapped[list[MessageModel]] = relationship(back_populates="session")
+	runs: Mapped[list[AgentRunModel]] = relationship(back_populates="session")
 
 
 class MessageModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
@@ -344,7 +357,7 @@ class MessageModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
 	model: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
-	session: Mapped["SessionModel"] = relationship(back_populates="messages")
+	session: Mapped[SessionModel] = relationship(back_populates="messages")
 
 
 class PersonaVersionModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -366,7 +379,7 @@ class PersonaVersionModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	knob_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 	settings_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
-	persona: Mapped["PersonaModel"] = relationship(back_populates="versions")
+	persona: Mapped[PersonaModel] = relationship(back_populates="versions")
 
 
 class AgentToolModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
@@ -386,10 +399,10 @@ class AgentToolModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 	tool_config: Mapped[dict[str, Any]] = mapped_column("config", JSONB, nullable=False, default=dict)
 
-	agent: Mapped["AgentModel"] = relationship(back_populates="tool_configs")
+	agent: Mapped[AgentModel] = relationship(back_populates="tool_configs")
 
 	@classmethod
-	def from_name(cls, *, agent_id: PyUUID, name: str) -> "AgentToolModel":
+	def from_name(cls, *, agent_id: PyUUID, name: str) -> AgentToolModel:
 		return cls(agent_id=agent_id, name=name)
 
 
@@ -413,7 +426,7 @@ class AnalysisRunModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
 	model: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
-	persona: Mapped["PersonaModel | None"] = relationship(back_populates="analysis_runs")
+	persona: Mapped[PersonaModel | None] = relationship(back_populates="analysis_runs")
 
 
 class AgentRunModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
@@ -444,8 +457,8 @@ class AgentRunModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	run_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
 	completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-	agent: Mapped["AgentModel"] = relationship(back_populates="runs")
-	session: Mapped["SessionModel | None"] = relationship(back_populates="runs")
+	agent: Mapped[AgentModel] = relationship(back_populates="runs")
+	session: Mapped[SessionModel | None] = relationship(back_populates="runs")
 
 	def mark_completed(
 		self,
@@ -489,8 +502,8 @@ class TeamSessionModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 	memory_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 	message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-	workflows: Mapped[list["TeamWorkflowModel"]] = relationship(back_populates="team_session", cascade="all, delete-orphan")
-	memory_entries: Mapped[list["TeamMemoryModel"]] = relationship(back_populates="team_session", cascade="all, delete-orphan")
+	workflows: Mapped[list[TeamWorkflowModel]] = relationship(back_populates="team_session", cascade="all, delete-orphan")
+	memory_entries: Mapped[list[TeamMemoryModel]] = relationship(back_populates="team_session", cascade="all, delete-orphan")
 
 
 class TeamWorkflowModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
@@ -514,8 +527,8 @@ class TeamWorkflowModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	tool_results: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
 	completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-	team_session: Mapped["TeamSessionModel"] = relationship(back_populates="workflows")
-	steps: Mapped[list["TeamWorkflowStepModel"]] = relationship(back_populates="workflow", cascade="all, delete-orphan")
+	team_session: Mapped[TeamSessionModel] = relationship(back_populates="workflows")
+	steps: Mapped[list[TeamWorkflowStepModel]] = relationship(back_populates="workflow", cascade="all, delete-orphan")
 
 
 class TeamWorkflowStepModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -535,7 +548,7 @@ class TeamWorkflowStepModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	parallel_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
 	duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-	workflow: Mapped["TeamWorkflowModel"] = relationship(back_populates="steps")
+	workflow: Mapped[TeamWorkflowModel] = relationship(back_populates="steps")
 
 
 class TeamMemoryModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
@@ -555,7 +568,7 @@ class TeamMemoryModel(UUIDPrimaryKeyMixin, TenantMixin, CreatedAtMixin, Base):
 	tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 	source_role: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
-	team_session: Mapped["TeamSessionModel"] = relationship(back_populates="memory_entries")
+	team_session: Mapped[TeamSessionModel] = relationship(back_populates="memory_entries")
 
 
 # ── Communal City (Phase 1) ─────────────────────────────────────────────────
@@ -608,16 +621,16 @@ class FamilyModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	policy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 	is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
-	members: Mapped[list["FamilyMemberModel"]] = relationship(
+	members: Mapped[list[FamilyMemberModel]] = relationship(
 		back_populates="family",
 		cascade="all, delete-orphan",
 	)
-	jobs: Mapped[list["CityJobModel"]] = relationship(back_populates="family", cascade="all, delete-orphan")
-	artifacts: Mapped[list["WorkspaceArtifactModel"]] = relationship(
+	jobs: Mapped[list[CityJobModel]] = relationship(back_populates="family", cascade="all, delete-orphan")
+	artifacts: Mapped[list[WorkspaceArtifactModel]] = relationship(
 		back_populates="family",
 		cascade="all, delete-orphan",
 	)
-	events: Mapped[list["CityEventModel"]] = relationship(back_populates="family", cascade="all, delete-orphan")
+	events: Mapped[list[CityEventModel]] = relationship(back_populates="family", cascade="all, delete-orphan")
 
 
 class FamilyMemberModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
@@ -676,9 +689,9 @@ class FamilyMemberModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	)
 	legacy: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
-	family: Mapped["FamilyModel"] = relationship(back_populates="members")
-	agent: Mapped["AgentModel"] = relationship()
-	parent_member: Mapped["FamilyMemberModel | None"] = relationship(
+	family: Mapped[FamilyModel] = relationship(back_populates="members")
+	agent: Mapped[AgentModel] = relationship()
+	parent_member: Mapped[FamilyMemberModel | None] = relationship(
 		remote_side="FamilyMemberModel.id",
 		foreign_keys=[parent_member_id],
 	)
@@ -710,13 +723,13 @@ class CityJobModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	)
 	completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-	family: Mapped["FamilyModel"] = relationship(back_populates="jobs")
-	artifacts: Mapped[list["WorkspaceArtifactModel"]] = relationship(
+	family: Mapped[FamilyModel] = relationship(back_populates="jobs")
+	artifacts: Mapped[list[WorkspaceArtifactModel]] = relationship(
 		back_populates="job",
 		cascade="all, delete-orphan",
 	)
-	runs: Mapped[list["WorkspaceRunModel"]] = relationship(back_populates="job", cascade="all, delete-orphan")
-	events: Mapped[list["CityEventModel"]] = relationship(back_populates="job", cascade="all, delete-orphan")
+	runs: Mapped[list[WorkspaceRunModel]] = relationship(back_populates="job", cascade="all, delete-orphan")
+	events: Mapped[list[CityEventModel]] = relationship(back_populates="job", cascade="all, delete-orphan")
 
 
 class WorkspaceArtifactModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -750,8 +763,8 @@ class WorkspaceArtifactModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	)
 	artifact_metadata: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, nullable=False, default=dict)
 
-	job: Mapped["CityJobModel"] = relationship(back_populates="artifacts")
-	family: Mapped["FamilyModel"] = relationship(back_populates="artifacts")
+	job: Mapped[CityJobModel] = relationship(back_populates="artifacts")
+	family: Mapped[FamilyModel] = relationship(back_populates="artifacts")
 
 
 class WorkspaceRunModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -781,7 +794,7 @@ class WorkspaceRunModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	artifact_refs: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
 	completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-	job: Mapped["CityJobModel"] = relationship(back_populates="runs")
+	job: Mapped[CityJobModel] = relationship(back_populates="runs")
 
 
 class CityEventModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -806,15 +819,15 @@ class CityEventModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	event_type: Mapped[str] = mapped_column(String(80), nullable=False)
 	payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
-	family: Mapped["FamilyModel | None"] = relationship(back_populates="events")
-	job: Mapped["CityJobModel | None"] = relationship(back_populates="events")
+	family: Mapped[FamilyModel | None] = relationship(back_populates="events")
+	job: Mapped[CityJobModel | None] = relationship(back_populates="events")
 
 
-class OrgNodeModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+class OrgNodeModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):
 	__tablename__ = "org_nodes"
 	__table_args__ = (
 		Index("idx_org_nodes_team_id", "team_id"),
-		UniqueConstraint("team_id", "role", name="uq_org_node_team_role"),
+		UniqueConstraint("tenant_id", "team_id", "role", name="uq_org_node_tenant_team_role"),
 	)
 
 	team_id: Mapped[str] = mapped_column(String(100), nullable=False, default="default")
@@ -827,14 +840,14 @@ class OrgNodeModel(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
 	updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow)
 
 
-class WorkTaskModel(UUIDPrimaryKeyMixin, Base):
+class WorkTaskModel(UUIDPrimaryKeyMixin, TenantMixin, Base):
 	__tablename__ = "work_tasks"
 	__table_args__ = (
 		Index("idx_work_tasks_team_id", "team_id"),
 		Index("idx_work_tasks_status", "status"),
 		Index("idx_work_tasks_role", "role"),
 		Index("idx_work_tasks_created_at", "created_at"),
-		UniqueConstraint("task_id", name="uq_work_tasks_task_id"),
+		UniqueConstraint("tenant_id", "task_id", name="uq_work_tasks_tenant_task_id"),
 		_enum_constraint("status", tuple(s.value for s in WorkTaskStatus), name="ck_work_tasks_status"),
 	)
 
@@ -853,14 +866,14 @@ class WorkTaskModel(UUIDPrimaryKeyMixin, Base):
 	completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-class AuditEventModel(UUIDPrimaryKeyMixin, Base):
+class AuditEventModel(UUIDPrimaryKeyMixin, TenantMixin, Base):
 	__tablename__ = "audit_events"
 	__table_args__ = (
 		Index("idx_audit_events_team_id", "team_id"),
 		Index("idx_audit_events_session_id", "session_id"),
 		Index("idx_audit_events_task_id", "task_id"),
 		Index("idx_audit_events_created_at", "created_at"),
-		UniqueConstraint("event_id", name="uq_audit_events_event_id"),
+		UniqueConstraint("tenant_id", "event_id", name="uq_audit_events_tenant_event_id"),
 		_enum_constraint("event_type", tuple(t.value for t in AuditEventType), name="ck_audit_events_type"),
 	)
 

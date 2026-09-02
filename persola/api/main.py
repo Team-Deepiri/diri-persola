@@ -1,10 +1,14 @@
-from contextlib import asynccontextmanager
-from datetime import datetime
-from uuid import UUID
-import re
 import asyncio
 import contextlib
+import os
+import re
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
+from uuid import UUID
 
+import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,11 +18,6 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, List, Optional
-import uuid
-import os
-from pathlib import Path
-import structlog
 
 from ..cache import TokenBucketRateLimiter
 
@@ -37,7 +36,7 @@ WORKQUEUE_POLL_INTERVAL = float(os.getenv("PERSOLA_WORKQUEUE_POLL_INTERVAL", "2.
 async def _invoke_rate_limit(request: Request) -> None:
     """FastAPI dependency that enforces the token-bucket limit on invoke."""
     identifier = get_remote_address(request)
-    allowed, remaining = await _invoke_bucket.consume(identifier)
+    allowed, _remaining = await _invoke_bucket.consume(identifier)
     if not allowed:
         # Seconds until one token is available again
         retry_after = max(1, round(1.0 / _invoke_bucket.refill_rate))
@@ -48,15 +47,18 @@ async def _invoke_rate_limit(request: Request) -> None:
         )
 
 from ..analysis import StyleToKnobMapper, WritingStyleExtractor
-from ..models import (
-    AgentConfig,
-    DEFAULT_PRESETS,
-    KNOB_DEFINITIONS,
-    PersonaProfile,
-    PresetName,
-)
+from ..auth import APIKeyAuth, get_request_tenant_id
 from ..db.database import check_db_health, close_db, get_db, init_db
-from ..db.models import DEFAULT_TENANT, AgentModel, AgentRunModel, AgentToolModel, AnalysisRunModel, PersonaModel, PersonaVersionModel, SessionModel
+from ..db.models import (
+    DEFAULT_TENANT,
+    AgentModel,
+    AgentRunModel,
+    AgentToolModel,
+    AnalysisRunModel,
+    PersonaModel,
+    PersonaVersionModel,
+    SessionModel,
+)
 from ..db.repositories import (
     AgentRepository,
     AgentRunRepository,
@@ -68,7 +70,10 @@ from ..db.repositories import (
     SessionRepository,
 )
 from ..db.services import PersonaService
-from ..auth import APIKeyAuth, get_request_tenant_id
+from ..engine import PersonaEngine
+from ..integrations.cyrex import CyrexClient
+from ..integrations.llm import HAS_CYREX, get_llm_provider
+from ..logging import configure_logging
 from ..metrics import (
     MetricsMiddleware,
     metrics_endpoint,
@@ -76,10 +81,13 @@ from ..metrics import (
     set_agents_total,
     set_personas_total,
 )
-from ..engine import PersonaEngine
-from ..integrations.llm import get_llm_provider, HAS_CYREX
-from ..integrations.cyrex import CyrexClient
-from ..logging import configure_logging
+from ..models import (
+    DEFAULT_PRESETS,
+    KNOB_DEFINITIONS,
+    AgentConfig,
+    PersonaProfile,
+    PresetName,
+)
 
 configure_logging()
 log = structlog.get_logger("persola.api")
@@ -99,7 +107,7 @@ async def lifespan(application: FastAPI):
         # Seed the default org chart so GET /org-chart stays a pure read.
         from ..orchestration.org_chart import GLOBAL_ORG_CHART
 
-        await GLOBAL_ORG_CHART.to_dict("default", session=db)
+        await GLOBAL_ORG_CHART.to_dict("default", session=db, tenant_id=DEFAULT_TENANT)
         await db.commit()
         break
 
@@ -170,8 +178,8 @@ app.add_middleware(
 )
 
 from .city import router as city_router
-from .teams import router as teams_router
 from .settings import router as settings_router
+from .teams import router as teams_router
 from .workqueue import router as workqueue_router
 
 app.include_router(teams_router)
@@ -318,7 +326,7 @@ async def get_knobs(db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/v1/tuning/validate")
-async def validate_knobs(knobs: Dict[str, float], db: AsyncSession = Depends(get_db)):
+async def validate_knobs(knobs: dict[str, float], db: AsyncSession = Depends(get_db)):
     return engine.validate_knobs(knobs)
 
 
@@ -334,7 +342,7 @@ class AnalysisCreateRequest(BaseModel):
 
 
 class AnalysisExtractResponse(BaseModel):
-    knobs: Dict[str, float]
+    knobs: dict[str, float]
     confidence: float
     notes: str
     persona_id: str | None = None
@@ -443,7 +451,7 @@ async def create_persona(
     return _to_persona_profile(created)
 
 
-@app.get("/api/v1/personas", response_model=List[PersonaProfile])
+@app.get("/api/v1/personas", response_model=list[PersonaProfile])
 async def list_personas(
     db: AsyncSession = Depends(get_db),
     tenant_id: UUID = Depends(get_request_tenant_id),
@@ -453,7 +461,7 @@ async def list_personas(
     return [_to_persona_profile(item) for item in personas]
 
 
-@app.get("/api/v1/personas/search", response_model=List[PersonaProfile])
+@app.get("/api/v1/personas/search", response_model=list[PersonaProfile])
 async def search_personas(
     q: str,
     db: AsyncSession = Depends(get_db),
@@ -580,15 +588,15 @@ class BlendRequest(BaseModel):
     persona1_id: str = None
     persona2_id: str = None
     ratio: float = 0.5
-    persona_ids: List[str] = None
-    weights: List[float] = None
+    persona_ids: list[str] = None
+    weights: list[float] = None
     name: str = None
     description: str = None
 
 
 class BlendPreviewRequest(BaseModel):
-    persona_ids: List[str]
-    weights: List[float]
+    persona_ids: list[str]
+    weights: list[float]
 
 
 @app.post("/api/v1/personas/blend/preview", response_model=PersonaProfile)
@@ -803,7 +811,7 @@ async def create_agent(
     return _to_agent_config(created)  
 
 
-@app.get("/api/v1/agents", response_model=List[AgentConfig])
+@app.get("/api/v1/agents", response_model=list[AgentConfig])
 async def list_agents(
     db: AsyncSession = Depends(get_db),
     tenant_id: UUID = Depends(get_request_tenant_id),
@@ -930,8 +938,8 @@ async def get_session_messages(
 
 class SessionCreateRequest(BaseModel):
     agent_id: str
-    session_id: Optional[str] = None
-    metadata: Dict[str, str] = Field(default_factory=dict)
+    session_id: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class MessageAppendRequest(BaseModel):
@@ -1013,8 +1021,8 @@ async def delete_session(
 
 class InvokeRequest(BaseModel):
     message: str = Field(min_length=1, max_length=32_768)
-    session_id: Optional[str] = None
-    history: Optional[List[Dict[str, str]]] = None
+    session_id: str | None = None
+    history: list[dict[str, str]] | None = None
 
 
 @app.get("/api/v1/provider/status")
@@ -1098,7 +1106,7 @@ async def list_cyrex_agents(db: AsyncSession = Depends(get_db)):
         return {"agents": await cyrex_client.list_cyrex_agents()}
     except Exception as e:
         log.error("cyrex.list_agents.error", error=str(e))
-        raise HTTPException(status_code=502, detail=f"Cyrex request failed: {str(e)}") from e
+        raise HTTPException(status_code=502, detail=f"Cyrex request failed: {e!s}") from e
 
 
 @app.post("/api/v1/cyrex/sync/{persona_id}")
@@ -1123,7 +1131,7 @@ async def sync_persona_to_cyrex(
         }
     except Exception as e:
         log.error("cyrex.sync.error", persona_id=persona_id, error=str(e))
-        raise HTTPException(status_code=502, detail=f"Cyrex sync failed: {str(e)}") from e
+        raise HTTPException(status_code=502, detail=f"Cyrex sync failed: {e!s}") from e
 
 
 @app.post("/api/v1/cyrex/import/{cyrex_id}", response_model=PersonaProfile)
@@ -1143,7 +1151,7 @@ async def import_persona_from_cyrex(
         return _to_persona_profile(created)
     except Exception as e:
         log.error("cyrex.import.error", cyrex_id=cyrex_id, error=str(e))
-        raise HTTPException(status_code=502, detail=f"Cyrex import failed: {str(e)}") from e
+        raise HTTPException(status_code=502, detail=f"Cyrex import failed: {e!s}") from e
 
 
 @app.post("/api/v1/agents/{agent_id}/invoke")

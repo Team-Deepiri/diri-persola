@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any
+from uuid import UUID
 
 from persola.engine import PersonaEngine
 from persola.models import PersonaProfile
 
-from .audit_log import AuditEventType, GLOBAL_AUDIT_LOG
+from .audit_log import GLOBAL_AUDIT_LOG, AuditEventType
 from .langgraph_runtime import run_langgraph_team
 from .memory import GLOBAL_MEMORY
 from .org_chart import GLOBAL_ORG_CHART
@@ -26,13 +28,13 @@ class TeamRunResult:
     session_id: str
     response: str
     workflow: WorkflowState
-    delegation_plan: Dict[str, Any]
+    delegation_plan: dict[str, Any]
     session: TeamSessionState
-    tool_results: List[Dict[str, Any]] = field(default_factory=list)
-    personalities_used: List[str] = field(default_factory=list)
+    tool_results: list[dict[str, Any]] = field(default_factory=list)
+    personalities_used: list[str] = field(default_factory=list)
     runtime_mode: str = "langgraph"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
             "response": self.response,
@@ -51,10 +53,10 @@ class TeamOrchestrator:
     def __init__(
         self,
         llm_fn: LLMFn,
-        persona_profile: Optional[PersonaProfile] = None,
-        tool_registry: Optional[ToolRegistry] = None,
+        persona_profile: PersonaProfile | None = None,
+        tool_registry: ToolRegistry | None = None,
         use_langgraph: bool = True,
-        tenant_id: Optional[str] = None,
+        tenant_id: str | None = None,
     ) -> None:
         self.llm_fn = llm_fn
         self.persona_engine = PersonaEngine()
@@ -62,6 +64,7 @@ class TeamOrchestrator:
         self._tool_registry = tool_registry
         self.use_langgraph = use_langgraph
         self.tenant_id = tenant_id
+        self._tenant_id_uuid = UUID(tenant_id) if tenant_id else None
 
     def _system_prompt_for_role(self, role_key: str) -> str:
         try:
@@ -77,10 +80,10 @@ class TeamOrchestrator:
         base = self.persona_engine.build_system_prompt(blended)
         return f"{base}\n\n## Team role\n{archetype.system_directive}\n\nCollaboration style: {archetype.collaboration_style}"
 
-    async def _make_tool_runner(self, registry: ToolRegistry) -> Callable[[str, str], Awaitable[List[Dict[str, Any]]]]:
+    async def _make_tool_runner(self, registry: ToolRegistry) -> Callable[[str, str], Awaitable[list[dict[str, Any]]]]:
         from .tool_calls import parse_tool_calls
 
-        async def runner(role: str, output: str) -> List[Dict[str, Any]]:
+        async def runner(role: str, output: str) -> list[dict[str, Any]]:
             parsed = parse_tool_calls(output)
             if parsed:
                 calls = parsed
@@ -115,7 +118,7 @@ class TeamOrchestrator:
     async def _run_langgraph_path(
         self,
         task: str,
-        specialists: List[str],
+        specialists: list[str],
         session: TeamSessionState,
         registry: ToolRegistry,
     ) -> TeamRunResult:
@@ -139,6 +142,7 @@ class TeamOrchestrator:
                 recipient=PersonalityRole.COORDINATOR.value,
                 summary=output[:280],
                 session_id=session.session_id,
+                tenant_id=self._tenant_id_uuid,
             )
         coordinator_output = graph_state.get("coordinator_output", "")
         workflow.add_step(
@@ -153,6 +157,7 @@ class TeamOrchestrator:
             recipient="user",
             summary=coordinator_output[:280],
             session_id=session.session_id,
+            tenant_id=self._tenant_id_uuid,
         )
         workflow.complete()
 
@@ -177,7 +182,7 @@ class TeamOrchestrator:
     async def _run_chain_path(
         self,
         task: str,
-        specialists: List[str],
+        specialists: list[str],
         session: TeamSessionState,
         registry: ToolRegistry,
     ) -> TeamRunResult:
@@ -210,7 +215,7 @@ class TeamOrchestrator:
         session.append_message("assistant", coordinator_output)
 
         team_id = session.team_id or "default"
-        tool_results: List[Dict[str, Any]] = []
+        tool_results: list[dict[str, Any]] = []
         for step in workflow.steps:
             tool_results.extend(step.tool_calls)
             is_coordinator = step.role == PersonalityRole.COORDINATOR.value
@@ -221,6 +226,7 @@ class TeamOrchestrator:
                 recipient="user" if is_coordinator else PersonalityRole.COORDINATOR.value,
                 summary=step.output[:280],
                 session_id=session.session_id,
+                tenant_id=self._tenant_id_uuid,
             )
 
         return TeamRunResult(
@@ -234,14 +240,14 @@ class TeamOrchestrator:
             runtime_mode="workflow_chain",
         )
 
-    async def run(self, task: str, session: Optional[TeamSessionState] = None) -> TeamRunResult:
+    async def run(self, task: str, session: TeamSessionState | None = None) -> TeamRunResult:
         session = session or TeamSessionState()
         team_id = session.team_id or "default"
         session.append_message("user", task)
         plan = select_delegation_plan(task)
-        specialists: List[str] = plan["specialists"]  # type: ignore[assignment]
+        specialists: list[str] = plan["specialists"]  # type: ignore[assignment]
 
-        top = await GLOBAL_ORG_CHART.top_of_chart(team_id)
+        top = await GLOBAL_ORG_CHART.top_of_chart(team_id, tenant_id=self._tenant_id_uuid)
         await GLOBAL_AUDIT_LOG.record(
             team_id=team_id,
             event_type=AuditEventType.INSTRUCTION,
@@ -250,6 +256,7 @@ class TeamOrchestrator:
             summary=task[:280],
             session_id=session.session_id,
             detail={"delegation_plan": plan},
+            tenant_id=self._tenant_id_uuid,
         )
 
         registry = self._tool_registry or build_default_registry(session.session_id, tenant_id=self.tenant_id)

@@ -6,7 +6,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-
 _EXEMPT_PREFIXES = ("/health", "/", "/ui", "/static", "/metrics", "/api/v1/city/health")
 
 
@@ -85,8 +84,20 @@ class APIKeyAuth(BaseHTTPMiddleware):
 def get_request_tenant_id(request: Request):
     """FastAPI dependency returning the resolved tenant id for the request.
 
-    Falls back to DEFAULT_TENANT so unauthenticated / exempt endpoints retain
-    the system tenant behaviour.
+    Resolved tenant comes from ``request.state.tenant_id`` (set by
+    ``APIKeyAuth`` from the API key → tenant mapping). When it is ``None`` —
+    i.e. the path was exempt from auth (``/health``, ``/ui``, ``/static``,
+    ``/metrics``, ``/api/v1/city/health``) or no API keys are configured —
+    it falls back to ``DEFAULT_TENANT`` so those endpoints retain the system
+    tenant behaviour.
+
+    SECURITY NOTE: this means exempt and unauthenticated requests operate under
+    the ``DEFAULT_TENANT`` (sentinel) context. That sentinel must only ever own
+    data intended to be globally/system accessible (e.g. pre-seeded presets and
+    the default org chart). Any endpoint that reads or writes user-scoped data
+    MUST NOT leak into ``DEFAULT_TENANT``; such endpoints should require an
+    authenticated key that maps to a real tenant. Keep ``DEFAULT_TENANT`` data
+    strictly system-managed and non-trusting of request-supplied content.
     """
     tenant_id = getattr(request.state, "tenant_id", None)
     if tenant_id is None:

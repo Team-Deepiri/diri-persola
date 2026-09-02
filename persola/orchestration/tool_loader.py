@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections.abc import Awaitable, Callable
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.repositories.agent_tool_repository import AgentToolRepository
-from .memory import GLOBAL_MEMORY, memory_recall_tool, memory_search_tool, memory_store_tool
+from .memory import memory_recall_tool, memory_search_tool, memory_store_tool
 from .parallel import ParallelToolExecutor
 from .redis_memory import REDIS_TEAM_MEMORY
 from .tools import ToolRegistry, ToolSpec
@@ -17,14 +18,15 @@ from .tools import ToolRegistry, ToolSpec
 async def build_team_registry(
     session_id: str,
     *,
-    db: Optional[AsyncSession] = None,
-    agent_id: Optional[UUID] = None,
-    tenant_id: Optional[str] = None,
+    db: AsyncSession | None = None,
+    agent_id: UUID | None = None,
+    tenant_id: str | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     executor = ParallelToolExecutor()
+    tenant_uuid = UUID(tenant_id) if tenant_id else None
 
-    async def _store(**kwargs: Any) -> Dict[str, Any]:
+    async def _store(**kwargs: Any) -> dict[str, Any]:
         key, value = kwargs["key"], kwargs["value"]
         await REDIS_TEAM_MEMORY.store(
             session_id, key, value, tenant_id=tenant_id, source_role=kwargs.get("source_role", "tool")
@@ -32,21 +34,21 @@ async def build_team_registry(
         memory_store_tool(session_id, key, str(value), tenant_id=tenant_id)
         return {"stored": True, "key": key}
 
-    async def _recall(**kwargs: Any) -> Dict[str, Any]:
+    async def _recall(**kwargs: Any) -> dict[str, Any]:
         key = kwargs["key"]
         redis_val = await REDIS_TEAM_MEMORY.recall(session_id, key, tenant_id=tenant_id)
         if redis_val is not None:
             return {"key": key, "value": redis_val, "found": True, "source": "redis"}
         return memory_recall_tool(session_id, key, tenant_id=tenant_id)
 
-    async def _search(**kwargs: Any) -> Dict[str, Any]:
+    async def _search(**kwargs: Any) -> dict[str, Any]:
         query = kwargs["query"]
         redis_hits = await REDIS_TEAM_MEMORY.search(session_id, query, tenant_id=tenant_id)
         if redis_hits:
             return {"query": query, "results": redis_hits, "source": "redis"}
         return memory_search_tool(session_id, query, tenant_id=tenant_id)
 
-    async def _persona_blend_preview(**kwargs: Any) -> Dict[str, Any]:
+    async def _persona_blend_preview(**kwargs: Any) -> dict[str, Any]:
         from ..engine import PersonaEngine
         from ..models import PersonaProfile
 
@@ -59,7 +61,7 @@ async def build_team_registry(
         blended = engine.blend_multiple(persona_objs, weights)
         return {"name": blended.name, "knobs": blended.get_knobs()}
 
-    async def _cyrex_status(**kwargs: Any) -> Dict[str, Any]:
+    async def _cyrex_status(**kwargs: Any) -> dict[str, Any]:
         from ..integrations.cyrex import CyrexClient
 
         client = CyrexClient()
@@ -68,7 +70,7 @@ async def build_team_registry(
         available = await client.is_available()
         return {"available": available, "configured": True}
 
-    async def _delegate_subtask(**kwargs: Any) -> Dict[str, Any]:
+    async def _delegate_subtask(**kwargs: Any) -> dict[str, Any]:
         from .task_queue import GLOBAL_TASK_QUEUE
 
         role = kwargs.get("role", "executor")
@@ -79,6 +81,7 @@ async def build_team_registry(
             subtask=subtask,
             origin=kwargs.get("origin", "delegate_subtask"),
             session_id=session_id,
+            tenant_id=tenant_uuid,
         )
         return {
             "delegated_to": role,
@@ -97,8 +100,8 @@ async def build_team_registry(
     if db is not None and agent_id is not None:
         tool_repo = AgentToolRepository(db)
 
-        def _make_agent_tool(name: str, cfg: dict) -> Callable[..., Awaitable[Dict[str, Any]]]:
-            async def _agent_tool(**kwargs: Any) -> Dict[str, Any]:
+        def _make_agent_tool(name: str, cfg: dict) -> Callable[..., Awaitable[dict[str, Any]]]:
+            async def _agent_tool(**kwargs: Any) -> dict[str, Any]:
                 return {"tool": name, "config": cfg, "input": kwargs, "status": "simulated"}
 
             return _agent_tool

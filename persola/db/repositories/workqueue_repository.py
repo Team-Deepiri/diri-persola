@@ -6,45 +6,46 @@ dataclasses. No orchestration imports live here (keeps layering clean).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import datetime, timedelta
+from uuid import UUID
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models import AuditEventModel, AuditEventType, OrgNodeModel, WorkTaskModel, WorkTaskStatus
+from ..models import AuditEventModel, OrgNodeModel, WorkTaskModel, WorkTaskStatus
 from .base import BaseRepository
 
 
-def _ensure_utc(value: datetime | None) -> datetime | None:
-	if value is None:
-		return None
-	if value.tzinfo is None:
-		return value.replace(tzinfo=timezone.utc)
-	return value
-
-
 def _now() -> datetime:
-	return datetime.now(timezone.utc)
+	from ...utils.time import utcnow
+
+	return utcnow()
 
 
 class OrgNodeRepository(BaseRepository[OrgNodeModel]):
-	def __init__(self, session: AsyncSession) -> None:
-		super().__init__(session, OrgNodeModel)
+	def __init__(self, session: AsyncSession, tenant_id: UUID | None = None) -> None:
+		super().__init__(session, OrgNodeModel, tenant_id=tenant_id)
+
+	def _scoped(self, query):
+		return self._tenant_filter(query)
 
 	async def list_for_team(self, team_id: str) -> list[OrgNodeModel]:
 		result = await self.session.execute(
-			select(OrgNodeModel)
-			.where(OrgNodeModel.team_id == team_id)
-			.order_by(OrgNodeModel.role)
+			self._scoped(
+				select(OrgNodeModel)
+				.where(OrgNodeModel.team_id == team_id)
+				.order_by(OrgNodeModel.role)
+			)
 		)
 		return list(result.scalars().all())
 
 	async def get_node(self, team_id: str, role: str) -> OrgNodeModel | None:
 		result = await self.session.execute(
-			select(OrgNodeModel).where(
-				OrgNodeModel.team_id == team_id,
-				OrgNodeModel.role == role,
+			self._scoped(
+				select(OrgNodeModel).where(
+					OrgNodeModel.team_id == team_id,
+					OrgNodeModel.role == role,
+				)
 			)
 		)
 		return result.scalar_one_or_none()
@@ -55,8 +56,8 @@ class OrgNodeRepository(BaseRepository[OrgNodeModel]):
 		*,
 		role: str,
 		title: str,
-		reports_to: Optional[str],
-		email: Optional[str],
+		reports_to: str | None,
+		email: str | None,
 		active: bool = True,
 	) -> OrgNodeModel:
 		node = await self.get_node(team_id, role)
@@ -69,6 +70,8 @@ class OrgNodeRepository(BaseRepository[OrgNodeModel]):
 				email=email,
 				active=active,
 			)
+			if self._is_tenant_scoped:
+				node.tenant_id = self.tenant_id
 			self.session.add(node)
 			await self.session.flush()
 		else:
@@ -87,8 +90,11 @@ class OrgNodeRepository(BaseRepository[OrgNodeModel]):
 
 
 class WorkTaskRepository(BaseRepository[WorkTaskModel]):
-	def __init__(self, session: AsyncSession) -> None:
-		super().__init__(session, WorkTaskModel)
+	def __init__(self, session: AsyncSession, tenant_id: UUID | None = None) -> None:
+		super().__init__(session, WorkTaskModel, tenant_id=tenant_id)
+
+	def _scoped(self, query):
+		return self._tenant_filter(query)
 
 	async def create_task(
 		self,
@@ -99,8 +105,8 @@ class WorkTaskRepository(BaseRepository[WorkTaskModel]):
 		subtask: str,
 		origin: str,
 		status: str,
-		parent_task_id: Optional[str] = None,
-		session_id: Optional[str] = None,
+		parent_task_id: str | None = None,
+		session_id: str | None = None,
 	) -> WorkTaskModel:
 		task = WorkTaskModel(
 			task_id=task_id,
@@ -112,29 +118,35 @@ class WorkTaskRepository(BaseRepository[WorkTaskModel]):
 			parent_task_id=parent_task_id,
 			session_id=session_id,
 		)
+		if self._is_tenant_scoped:
+			task.tenant_id = self.tenant_id
 		self.session.add(task)
 		await self.session.flush()
 		return task
 
 	async def get_by_task_id(self, task_id: str) -> WorkTaskModel | None:
 		result = await self.session.execute(
-			select(WorkTaskModel).where(WorkTaskModel.task_id == task_id)
+			self._scoped(select(WorkTaskModel).where(WorkTaskModel.task_id == task_id))
 		)
 		return result.scalar_one_or_none()
 
 	async def list_for_team(self, team_id: str) -> list[WorkTaskModel]:
 		result = await self.session.execute(
-			select(WorkTaskModel)
-			.where(WorkTaskModel.team_id == team_id)
-			.order_by(WorkTaskModel.created_at)
+			self._scoped(
+				select(WorkTaskModel)
+				.where(WorkTaskModel.team_id == team_id)
+				.order_by(WorkTaskModel.created_at)
+			)
 		)
 		return list(result.scalars().all())
 
 	async def children(self, parent_task_id: str) -> list[WorkTaskModel]:
 		result = await self.session.execute(
-			select(WorkTaskModel)
-			.where(WorkTaskModel.parent_task_id == parent_task_id)
-			.order_by(WorkTaskModel.created_at)
+			self._scoped(
+				select(WorkTaskModel)
+				.where(WorkTaskModel.parent_task_id == parent_task_id)
+				.order_by(WorkTaskModel.created_at)
+			)
 		)
 		return list(result.scalars().all())
 
@@ -142,7 +154,7 @@ class WorkTaskRepository(BaseRepository[WorkTaskModel]):
 		self, team_id: str, *, stale_after_seconds: int = 600
 	) -> int:
 		cutoff = _now() - timedelta(seconds=stale_after_seconds)
-		result = await self.session.execute(
+		stmt = (
 			update(WorkTaskModel)
 			.where(
 				WorkTaskModel.team_id == team_id,
@@ -153,10 +165,13 @@ class WorkTaskRepository(BaseRepository[WorkTaskModel]):
 			)
 			.values(status=WorkTaskStatus.QUEUED.value, error="re-queued: stale claim")
 		)
+		if self._is_tenant_scoped:
+			stmt = stmt.where(WorkTaskModel.tenant_id == self.tenant_id)
+		result = await self.session.execute(stmt)
 		return result.rowcount or 0
 
 	async def claim_next(
-		self, team_id: str, role: Optional[str]
+		self, team_id: str, role: str | None
 	) -> WorkTaskModel | None:
 		await self.recover_stale(team_id)
 		stmt = (
@@ -167,6 +182,8 @@ class WorkTaskRepository(BaseRepository[WorkTaskModel]):
 			)
 			.order_by(WorkTaskModel.created_at)
 		)
+		if self._is_tenant_scoped:
+			stmt = stmt.where(WorkTaskModel.tenant_id == self.tenant_id)
 		if role is not None:
 			stmt = stmt.where(WorkTaskModel.role == role)
 		if self.session.get_bind().dialect.name != "sqlite":
@@ -185,8 +202,8 @@ class WorkTaskRepository(BaseRepository[WorkTaskModel]):
 		task_id: str,
 		status: str,
 		*,
-		result: Optional[str] = None,
-		error: Optional[str] = None,
+		result: str | None = None,
+		error: str | None = None,
 		mark_completed: bool = False,
 	) -> WorkTaskModel | None:
 		row = await self.get_by_task_id(task_id)
@@ -204,8 +221,11 @@ class WorkTaskRepository(BaseRepository[WorkTaskModel]):
 
 
 class AuditEventRepository(BaseRepository[AuditEventModel]):
-	def __init__(self, session: AsyncSession) -> None:
-		super().__init__(session, AuditEventModel)
+	def __init__(self, session: AsyncSession, tenant_id: UUID | None = None) -> None:
+		super().__init__(session, AuditEventModel, tenant_id=tenant_id)
+
+	def _scoped(self, query):
+		return self._tenant_filter(query)
 
 	async def create_event(
 		self,
@@ -215,11 +235,11 @@ class AuditEventRepository(BaseRepository[AuditEventModel]):
 		event_type: str,
 		actor: str,
 		summary: str,
-		recipient: Optional[str] = None,
-		session_id: Optional[str] = None,
-		task_id: Optional[str] = None,
-		detail: Optional[dict] = None,
-		created_at: Optional[datetime] = None,
+		recipient: str | None = None,
+		session_id: str | None = None,
+		task_id: str | None = None,
+		detail: dict | None = None,
+		created_at: datetime | None = None,
 	) -> AuditEventModel:
 		event = AuditEventModel(
 			event_id=event_id,
@@ -233,6 +253,8 @@ class AuditEventRepository(BaseRepository[AuditEventModel]):
 			detail=dict(detail or {}),
 			created_at=created_at or _now(),
 		)
+		if self._is_tenant_scoped:
+			event.tenant_id = self.tenant_id
 		self.session.add(event)
 		await self.session.flush()
 		return event
@@ -241,11 +263,13 @@ class AuditEventRepository(BaseRepository[AuditEventModel]):
 		self,
 		team_id: str,
 		*,
-		session_id: Optional[str] = None,
-		task_id: Optional[str] = None,
+		session_id: str | None = None,
+		task_id: str | None = None,
 		limit: int = 200,
 	) -> list[AuditEventModel]:
 		filters: list = [AuditEventModel.team_id == team_id]
+		if self._is_tenant_scoped:
+			filters.append(AuditEventModel.tenant_id == self.tenant_id)
 		if session_id is not None:
 			filters.append(AuditEventModel.session_id == session_id)
 		if task_id is not None:
