@@ -819,8 +819,8 @@ class CityEventModel(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 	event_type: Mapped[str] = mapped_column(String(80), nullable=False)
 	payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
 
-	family: Mapped[FamilyModel | None] = relationship(back_populates="events")
-	job: Mapped[CityJobModel | None] = relationship(back_populates="events")
+	family: Mapped["FamilyModel | None"] = relationship(back_populates="events")
+	job: Mapped["CityJobModel | None"] = relationship(back_populates="events")
 
 
 class OrgNodeModel(UUIDPrimaryKeyMixin, TenantMixin, UpdatedAtMixin, Base):

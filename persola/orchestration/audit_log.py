@@ -18,11 +18,12 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+from ..utils.time import utcnow
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import AuditEventType
 from ..db.repositories.workqueue_repository import AuditEventRepository
-from ..utils.time import utcnow
 from ._session_store import SessionFactoryMixin
 
 
