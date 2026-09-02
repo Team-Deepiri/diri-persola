@@ -27,7 +27,7 @@ def build_langchain_tool_specs(registry_tools: List[Dict[str, Any]]) -> List[Any
         name = meta["name"]
         description = meta["description"]
 
-        async def _stub(**kwargs: Any, _name: str = name) -> str:
+        async def _stub(_name: str = name, **kwargs: Any) -> str:
             return f"tool {_name} invoked with {kwargs}"
 
         specs.append(

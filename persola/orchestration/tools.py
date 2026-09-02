@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any
+from uuid import UUID
 
-
-ToolHandler = Callable[..., Awaitable[Dict[str, Any]]]
+ToolHandler = Callable[..., Awaitable[dict[str, Any]]]
 
 
 @dataclass
@@ -16,20 +17,20 @@ class ToolSpec:
     description: str
     handler: ToolHandler
     parallel_safe: bool = True
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
 
 
 class ToolRegistry:
     def __init__(self) -> None:
-        self._tools: Dict[str, ToolSpec] = {}
+        self._tools: dict[str, ToolSpec] = {}
 
     def register(self, spec: ToolSpec) -> None:
         self._tools[spec.name] = spec
 
-    def get(self, name: str) -> Optional[ToolSpec]:
+    def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
 
-    def list_tools(self) -> List[Dict[str, Any]]:
+    def list_tools(self) -> list[dict[str, Any]]:
         return [
             {
                 "name": t.name,
@@ -40,20 +41,20 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
-    async def run(self, name: str, **kwargs: Any) -> Dict[str, Any]:
+    async def run(self, name: str, **kwargs: Any) -> dict[str, Any]:
         spec = self._tools.get(name)
         if spec is None:
             return {"error": f"Unknown tool: {name}"}
         return await spec.handler(**kwargs)
 
-    async def run_parallel(self, calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def run_parallel(self, calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Run tool calls; ``parallel_safe=False`` tools execute serially (shared DB safety)."""
 
-        results: List[Dict[str, Any] | None] = [None] * len(calls)
-        parallel_idx: List[int] = []
-        parallel_coros: List[Any] = []
+        results: list[dict[str, Any] | None] = [None] * len(calls)
+        parallel_idx: list[int] = []
+        parallel_coros: list[Any] = []
 
-        async def _run(call: Dict[str, Any]) -> Dict[str, Any]:
+        async def _run(call: dict[str, Any]) -> dict[str, Any]:
             name = call["name"]
             args = call.get("args", {})
             spec = self._tools.get(name)
@@ -78,21 +79,22 @@ class ToolRegistry:
         return [r if r is not None else {"name": "unknown", "error": "missing"} for r in results]
 
 
-def build_default_registry(session_id: str) -> ToolRegistry:
+def build_default_registry(session_id: str, tenant_id: str | None = None) -> ToolRegistry:
     from .memory import memory_recall_tool, memory_search_tool, memory_store_tool
 
     registry = ToolRegistry()
+    tenant_uuid = UUID(tenant_id) if tenant_id else None
 
-    async def _store(**kwargs: Any) -> Dict[str, Any]:
-        return memory_store_tool(session_id, kwargs["key"], kwargs["value"])
+    async def _store(**kwargs: Any) -> dict[str, Any]:
+        return memory_store_tool(session_id, kwargs["key"], kwargs["value"], tenant_id=tenant_id)
 
-    async def _recall(**kwargs: Any) -> Dict[str, Any]:
-        return memory_recall_tool(session_id, kwargs["key"])
+    async def _recall(**kwargs: Any) -> dict[str, Any]:
+        return memory_recall_tool(session_id, kwargs["key"], tenant_id=tenant_id)
 
-    async def _search(**kwargs: Any) -> Dict[str, Any]:
-        return memory_search_tool(session_id, kwargs["query"])
+    async def _search(**kwargs: Any) -> dict[str, Any]:
+        return memory_search_tool(session_id, kwargs["query"], tenant_id=tenant_id)
 
-    async def _echo(**kwargs: Any) -> Dict[str, Any]:
+    async def _echo(**kwargs: Any) -> dict[str, Any]:
         return {"echo": kwargs.get("text", "")}
 
     registry.register(
@@ -108,7 +110,7 @@ def build_default_registry(session_id: str) -> ToolRegistry:
         ToolSpec("echo", "Echo text (debug / connectivity).", _echo, tags=["utility"])
     )
 
-    async def _delegate(**kwargs: Any) -> Dict[str, Any]:
+    async def _delegate(**kwargs: Any) -> dict[str, Any]:
         from .task_queue import GLOBAL_TASK_QUEUE
 
         role = kwargs.get("role", "executor")
@@ -119,6 +121,7 @@ def build_default_registry(session_id: str) -> ToolRegistry:
             subtask=subtask,
             origin=kwargs.get("origin", "delegate_subtask"),
             session_id=session_id,
+            tenant_id=tenant_uuid,
         )
         return {"delegated_to": role, "subtask": subtask, "status": task.status.value, "task_id": task.task_id}
 

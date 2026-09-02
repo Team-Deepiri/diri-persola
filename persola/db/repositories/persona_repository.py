@@ -10,16 +10,22 @@ from .base import BaseRepository
 
 
 class PersonaRepository(BaseRepository[PersonaModel]):
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(session, PersonaModel)
+    def __init__(
+        self,
+        session: AsyncSession,
+        tenant_id: UUID | None = None,
+    ) -> None:
+        super().__init__(session, PersonaModel, tenant_id=tenant_id)
 
     async def get_by_name(self, name: str) -> PersonaModel | None:
-        query = select(PersonaModel).where(PersonaModel.name == name)
+        query = self._tenant_filter(select(PersonaModel).where(PersonaModel.name == name))
         result = await self.session.execute(query)
         return result.scalar_one_or_none()
 
     async def list_presets(self) -> list[PersonaModel]:
-        query = select(PersonaModel).where(PersonaModel.is_preset.is_(True))
+        query = self._tenant_filter(
+            select(PersonaModel).where(PersonaModel.is_preset.is_(True))
+        )
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
@@ -27,10 +33,12 @@ class PersonaRepository(BaseRepository[PersonaModel]):
         term = query_text.strip()
         if not term:
             return []
-        query = select(PersonaModel).where(
-            or_(
-                PersonaModel.name.ilike(f"%{term}%"),
-                PersonaModel.description.ilike(f"%{term}%"),
+        query = self._tenant_filter(
+            select(PersonaModel).where(
+                or_(
+                    PersonaModel.name.ilike(f"%{term}%"),
+                    PersonaModel.description.ilike(f"%{term}%"),
+                )
             )
         )
         result = await self.session.execute(query)

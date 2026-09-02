@@ -14,8 +14,9 @@ chart instead of an anonymous list of roles.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,11 +29,11 @@ from .personalities import BUILTIN_ARCHETYPES, PersonalityRole
 class OrgNode:
     role: str  # PersonalityRole value, or a custom role key for future personas
     title: str
-    reports_to: Optional[str] = None  # role key of manager, None = top of chart
-    email: Optional[str] = None  # optional agent inbox, mirrors Alook's @agent addresses
+    reports_to: str | None = None  # role key of manager, None = top of chart
+    email: str | None = None  # optional agent inbox, mirrors Alook's @agent addresses
     active: bool = True
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "role": self.role,
             "title": self.title,
@@ -53,11 +54,15 @@ def _hydrate_node(row: Any) -> OrgNode:
 
 
 class OrgChart(SessionFactoryMixin):
-    """A team's reporting structure, keyed by ``team_id``, stored in ``org_nodes``."""
+    """A team's reporting structure, keyed by ``team_id``, stored in ``org_nodes``.
 
-    async def _ensure_seeded(self, team_id: str, session: AsyncSession) -> None:
+    ``tenant_id`` scopes reads/writes to a single tenant; when omitted the
+    repository is unscoped (legacy behaviour).
+    """
+
+    async def _ensure_seeded(self, team_id: str, session: AsyncSession, tenant_id: UUID | None = None) -> None:
         """Upsert missing default roles without overwriting user customization."""
-        repo = OrgNodeRepository(session)
+        repo = OrgNodeRepository(session, tenant_id=tenant_id)
         existing = {node.role for node in await repo.list_for_team(team_id)}
         for role, archetype in BUILTIN_ARCHETYPES.items():
             if role.value not in existing:
@@ -71,25 +76,25 @@ class OrgChart(SessionFactoryMixin):
         await session.flush()
 
     async def _nodes(
-        self, team_id: str, session: AsyncSession
-    ) -> List[OrgNode]:
-        await self._ensure_seeded(team_id, session)
-        repo = OrgNodeRepository(session)
+        self, team_id: str, session: AsyncSession, tenant_id: UUID | None = None
+    ) -> list[OrgNode]:
+        await self._ensure_seeded(team_id, session, tenant_id)
+        repo = OrgNodeRepository(session, tenant_id=tenant_id)
         return [_hydrate_node(row) for row in await repo.list_for_team(team_id)]
 
     async def get(
-        self, team_id: str, *, session: Optional[AsyncSession] = None
-    ) -> List[OrgNode]:
-        async def _op(s: AsyncSession) -> List[OrgNode]:
-            return await self._nodes(team_id, s)
+        self, team_id: str, *, session: AsyncSession | None = None, tenant_id: UUID | None = None
+    ) -> list[OrgNode]:
+        async def _op(s: AsyncSession) -> list[OrgNode]:
+            return await self._nodes(team_id, s, tenant_id)
 
         return await self._run(session, _op, commit=True)
 
     async def upsert_node(
-        self, team_id: str, node: OrgNode, *, session: Optional[AsyncSession] = None
+        self, team_id: str, node: OrgNode, *, session: AsyncSession | None = None, tenant_id: UUID | None = None
     ) -> OrgNode:
         async def _op(s: AsyncSession) -> OrgNode:
-            repo = OrgNodeRepository(s)
+            repo = OrgNodeRepository(s, tenant_id=tenant_id)
             row = await repo.upsert(
                 team_id,
                 role=node.role,
@@ -103,19 +108,19 @@ class OrgChart(SessionFactoryMixin):
         return await self._run(session, _op, commit=True)
 
     async def deactivate(
-        self, team_id: str, role: str, *, session: Optional[AsyncSession] = None
+        self, team_id: str, role: str, *, session: AsyncSession | None = None, tenant_id: UUID | None = None
     ) -> None:
         async def _op(s: AsyncSession) -> None:
-            repo = OrgNodeRepository(s)
+            repo = OrgNodeRepository(s, tenant_id=tenant_id)
             await repo.deactivate(team_id, role)
 
         await self._run(session, _op, commit=True)
 
     async def manager_of(
-        self, team_id: str, role: str, *, session: Optional[AsyncSession] = None
-    ) -> Optional[OrgNode]:
-        async def _op(s: AsyncSession) -> Optional[OrgNode]:
-            chart = {node.role: node for node in await self._nodes(team_id, s)}
+        self, team_id: str, role: str, *, session: AsyncSession | None = None, tenant_id: UUID | None = None
+    ) -> OrgNode | None:
+        async def _op(s: AsyncSession) -> OrgNode | None:
+            chart = {node.role: node for node in await self._nodes(team_id, s, tenant_id)}
             node = chart.get(role)
             if node is None or node.reports_to is None:
                 return None
@@ -124,18 +129,18 @@ class OrgChart(SessionFactoryMixin):
         return await self._run(session, _op, commit=True)
 
     async def reports_of(
-        self, team_id: str, role: str, *, session: Optional[AsyncSession] = None
-    ) -> List[OrgNode]:
-        async def _op(s: AsyncSession) -> List[OrgNode]:
-            return [n for n in await self._nodes(team_id, s) if n.reports_to == role and n.active]
+        self, team_id: str, role: str, *, session: AsyncSession | None = None, tenant_id: UUID | None = None
+    ) -> list[OrgNode]:
+        async def _op(s: AsyncSession) -> list[OrgNode]:
+            return [n for n in await self._nodes(team_id, s, tenant_id) if n.reports_to == role and n.active]
 
         return await self._run(session, _op, commit=True)
 
     async def top_of_chart(
-        self, team_id: str, *, session: Optional[AsyncSession] = None
-    ) -> Optional[OrgNode]:
-        async def _op(s: AsyncSession) -> Optional[OrgNode]:
-            for node in await self._nodes(team_id, s):
+        self, team_id: str, *, session: AsyncSession | None = None, tenant_id: UUID | None = None
+    ) -> OrgNode | None:
+        async def _op(s: AsyncSession) -> OrgNode | None:
+            for node in await self._nodes(team_id, s, tenant_id):
                 if node.reports_to is None and node.active:
                     return node
             return None
@@ -143,11 +148,11 @@ class OrgChart(SessionFactoryMixin):
         return await self._run(session, _op, commit=True)
 
     async def resolve_chain(
-        self, team_id: str, role: str, *, session: Optional[AsyncSession] = None
-    ) -> List[str]:
+        self, team_id: str, role: str, *, session: AsyncSession | None = None, tenant_id: UUID | None = None
+    ) -> list[str]:
         """Return the reporting chain from ``role`` up to the top, inclusive."""
-        async def _op(s: AsyncSession) -> List[str]:
-            chart = {node.role: node for node in await self._nodes(team_id, s)}
+        async def _op(s: AsyncSession) -> list[str]:
+            chart = {node.role: node for node in await self._nodes(team_id, s, tenant_id)}
             chain = [role]
             current = chart.get(role)
             seen = {role}
@@ -160,10 +165,10 @@ class OrgChart(SessionFactoryMixin):
         return await self._run(session, _op, commit=True)
 
     async def to_dict(
-        self, team_id: str, *, session: Optional[AsyncSession] = None
-    ) -> Dict[str, object]:
-        async def _op(s: AsyncSession) -> Dict[str, object]:
-            nodes = await self._nodes(team_id, s)
+        self, team_id: str, *, session: AsyncSession | None = None, tenant_id: UUID | None = None
+    ) -> dict[str, object]:
+        async def _op(s: AsyncSession) -> dict[str, object]:
+            nodes = await self._nodes(team_id, s, tenant_id)
             top = next((n for n in nodes if n.reports_to is None and n.active), None)
             return {
                 "team_id": team_id,
