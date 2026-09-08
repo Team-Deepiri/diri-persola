@@ -168,6 +168,37 @@ class CityEventRepository(BaseRepository[CityEventModel]):
 	def __init__(self, session: AsyncSession) -> None:
 		super().__init__(session, CityEventModel)
 
+	def create_workqueue_task_event(
+		self,
+		*,
+		task_id: str,
+		team_id: str,
+		role: str,
+		subtask: str,
+		outcome: str,
+		result: str | None = None,
+		error: str | None = None,
+	) -> CityEventModel:
+		"""Record a task-board outcome as a city event (decoupled from the daemon)."""
+		payload: dict = {
+			"task_id": task_id,
+			"team_id": team_id,
+			"role": role,
+			"subtask": subtask[:500],
+		}
+		if result is not None:
+			payload["result"] = result[:1000]
+		if error is not None:
+			payload["error"] = error[:1000]
+		event = CityEventModel(
+			family_id=None,
+			job_id=None,
+			event_type=f"workqueue.task.{outcome}",
+			payload=payload,
+		)
+		self.session.add(event)
+		return event
+
 	async def list_for_job(self, job_id: UUID, limit: int = 500) -> list[CityEventModel]:
 		query = (
 			select(CityEventModel)

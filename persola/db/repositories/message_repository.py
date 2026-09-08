@@ -10,8 +10,12 @@ from .base import BaseRepository
 
 
 class MessageRepository(BaseRepository[MessageModel]):
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(session, MessageModel)
+    def __init__(
+        self,
+        session: AsyncSession,
+        tenant_id: UUID | None = None,
+    ) -> None:
+        super().__init__(session, MessageModel, tenant_id=tenant_id)
 
     async def add(self, session_id: UUID, role: str, content: str, **meta) -> MessageModel:
         message = MessageModel(
@@ -23,7 +27,7 @@ class MessageRepository(BaseRepository[MessageModel]):
         return await self.create(message)
 
     async def get_history(self, session_id: UUID, limit: int = 50) -> list[MessageModel]:
-        query = (
+        query = self._tenant_filter(
             select(MessageModel)
             .where(MessageModel.session_id == session_id)
             .order_by(MessageModel.created_at.asc())
@@ -33,7 +37,7 @@ class MessageRepository(BaseRepository[MessageModel]):
         return list(result.scalars().all())
 
     async def get_recent(self, session_id: UUID, n: int) -> list[MessageModel]:
-        query = (
+        query = self._tenant_filter(
             select(MessageModel)
             .where(MessageModel.session_id == session_id)
             .order_by(desc(MessageModel.created_at))

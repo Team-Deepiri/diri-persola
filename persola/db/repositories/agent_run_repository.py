@@ -11,11 +11,15 @@ from .base import BaseRepository
 
 
 class AgentRunRepository(BaseRepository[AgentRunModel]):
-    def __init__(self, session: AsyncSession) -> None:
-        super().__init__(session, AgentRunModel)
+    def __init__(
+        self,
+        session: AsyncSession,
+        tenant_id: UUID | None = None,
+    ) -> None:
+        super().__init__(session, AgentRunModel, tenant_id=tenant_id)
 
     async def list_by_agent(self, agent_id: UUID, limit: int = 100) -> list[AgentRunModel]:
-        query = (
+        query = self._tenant_filter(
             select(AgentRunModel)
             .where(AgentRunModel.agent_id == agent_id)
             .order_by(desc(AgentRunModel.created_at))

@@ -24,12 +24,13 @@ LLMFn = Callable[[str, str], Awaitable[str]]
 
 
 class TeamService:
-    def __init__(self, db: AsyncSession) -> None:
+    def __init__(self, db: AsyncSession, tenant_id: UUID | None = None) -> None:
         self.db = db
-        self.sessions = TeamSessionRepository(db)
-        self.workflows = TeamWorkflowRepository(db)
+        self.tenant_id = tenant_id
+        self.sessions = TeamSessionRepository(db, tenant_id=tenant_id)
+        self.workflows = TeamWorkflowRepository(db, tenant_id=tenant_id)
         self.steps = TeamWorkflowStepRepository(db)
-        self.memory = TeamMemoryRepository(db)
+        self.memory = TeamMemoryRepository(db, tenant_id=tenant_id)
 
     async def _resolve_or_create_session(
         self,
@@ -51,7 +52,7 @@ class TeamService:
             row.persona_id = persona_id
             await self.db.flush()
 
-        redis_snapshot = await REDIS_TEAM_MEMORY.snapshot(runtime.session_id)
+        redis_snapshot = await REDIS_TEAM_MEMORY.snapshot(runtime.session_id, tenant_id=str(self.tenant_id) if self.tenant_id else None)
         if redis_snapshot:
             runtime.memory_snapshot = redis_snapshot
         elif row.memory_snapshot:
@@ -76,12 +77,18 @@ class TeamService:
             team_config={"use_langgraph": use_langgraph},
         )
 
-        registry = await build_team_registry(runtime.session_id, db=self.db, agent_id=agent_id)
+        registry = await build_team_registry(
+            runtime.session_id,
+            db=self.db,
+            agent_id=agent_id,
+            tenant_id=str(self.tenant_id) if self.tenant_id else None,
+        )
         orchestrator = TeamOrchestrator(
             llm_fn=llm_fn,
             persona_profile=persona_profile,
             tool_registry=registry,
             use_langgraph=use_langgraph,
+            tenant_id=str(self.tenant_id) if self.tenant_id else None,
         )
 
         workflow_row = TeamWorkflowModel(
@@ -121,7 +128,7 @@ class TeamService:
                 source_role=step.role,
             )
 
-        redis_snapshot = await REDIS_TEAM_MEMORY.snapshot(result.session_id)
+        redis_snapshot = await REDIS_TEAM_MEMORY.snapshot(result.session_id, tenant_id=str(self.tenant_id) if self.tenant_id else None)
         session_row.memory_snapshot = redis_snapshot or result.session.memory_snapshot
         await self.sessions.increment_messages(session_row.id, count=2)
 
@@ -139,7 +146,7 @@ class TeamService:
         if row is None:
             return None
 
-        redis_memory = await REDIS_TEAM_MEMORY.snapshot(external_session_id)
+        redis_memory = await REDIS_TEAM_MEMORY.snapshot(external_session_id, tenant_id=str(self.tenant_id) if self.tenant_id else None)
         workflows = await self.workflows.list_for_session(row.id)
         memory_rows = await self.memory.list_for_session(row.id)
 
@@ -202,7 +209,9 @@ class TeamService:
         ]
 
     async def search_memory(self, external_session_id: str, query: str) -> list[dict[str, Any]]:
-        redis_hits = await REDIS_TEAM_MEMORY.search(external_session_id, query)
+        redis_hits = await REDIS_TEAM_MEMORY.search(
+            external_session_id, query, tenant_id=str(self.tenant_id) if self.tenant_id else None
+        )
         if redis_hits:
             return redis_hits
 

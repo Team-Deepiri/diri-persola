@@ -14,7 +14,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -24,6 +24,18 @@ from sqlalchemy.pool import StaticPool
 def _compile_jsonb_for_sqlite(type_, compiler, **kw):
     """Allow PostgreSQL JSONB columns to be created in SQLite-backed tests."""
     return "JSON"
+
+
+@compiles(UUID, "sqlite")
+def _compile_uuid_for_sqlite(type_, compiler, **kw):
+    """Render PostgreSQL UUID as CHAR(32) in SQLite-backed tests.
+
+    Without an explicit CHAR type, SQLite's NUMERIC affinity coerces all-zero
+    hex strings (the DEFAULT_TENANT sentinel) into INTEGER 0, which then fails
+    the UUID result processor. CHAR(32) keeps TEXT affinity so the raw uuid hex
+    round-trips intact.
+    """
+    return "CHAR(32)"
 
 
 @pytest.fixture()

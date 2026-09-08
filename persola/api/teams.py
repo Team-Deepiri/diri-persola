@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..auth import get_request_tenant_id
 from ..cache import TokenBucketRateLimiter
 from ..db.database import get_db
 from ..db.repositories import PersonaRepository
@@ -75,14 +76,22 @@ async def team_runtime_info():
 
 
 @router.get("/sessions")
-async def list_team_sessions(db: AsyncSession = Depends(get_db), limit: int = 25):
-    service = TeamService(db)
+async def list_team_sessions(
+    db: AsyncSession = Depends(get_db),
+    limit: int = 25,
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    service = TeamService(db, tenant_id=tenant_id)
     return await service.list_sessions(limit=limit)
 
 
 @router.get("/sessions/{session_id}")
-async def get_team_session(session_id: str, db: AsyncSession = Depends(get_db)):
-    service = TeamService(db)
+async def get_team_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
+):
+    service = TeamService(db, tenant_id=tenant_id)
     detail = await service.get_session_detail(session_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="Team session not found")
@@ -94,8 +103,9 @@ async def search_team_memory(
     session_id: str,
     body: MemorySearchRequest,
     db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
 ):
-    service = TeamService(db)
+    service = TeamService(db, tenant_id=tenant_id)
     return {"query": body.query, "results": await service.search_memory(session_id, body.query)}
 
 
@@ -104,12 +114,13 @@ async def invoke_team(
     request: Request,
     body: TeamInvokeRequest,
     db: AsyncSession = Depends(get_db),
+    tenant_id: UUID = Depends(get_request_tenant_id),
     _rl: None = Depends(_team_rate_limit),
 ):
     profile = None
     persona_uuid: UUID | None = None
     if body.persona_id:
-        persona_repo = PersonaRepository(db)
+        persona_repo = PersonaRepository(db, tenant_id=tenant_id)
         row = await persona_repo.get(UUID(body.persona_id))
         if row:
             persona_uuid = row.id
@@ -127,7 +138,7 @@ async def invoke_team(
             system_prompt=system,
         )
 
-    service = TeamService(db)
+    service = TeamService(db, tenant_id=tenant_id)
     try:
         result = await service.invoke(
             body.task,

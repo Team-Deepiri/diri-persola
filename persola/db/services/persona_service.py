@@ -12,8 +12,8 @@ from ..repositories import PersonaRepository
 
 
 class PersonaService:
-    def __init__(self, session: AsyncSession) -> None:
-        self.repository = PersonaRepository(session)
+    def __init__(self, session: AsyncSession, tenant_id: UUID | None = None) -> None:
+        self.repository = PersonaRepository(session, tenant_id=tenant_id)
         self.engine = PersonaEngine()
         self.cache = PersonaCache()
 
