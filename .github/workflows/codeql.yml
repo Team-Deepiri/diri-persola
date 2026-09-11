@@ -1,15 +1,23 @@
 name: "CodeQL"
 
 on:
-  push:
-    branches: [ "main", "sandeep-dev" ]
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE*'
   schedule:
     - cron: '0 6 * * 1'  # Weekly on Mondays
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
+    timeout-minutes: 20
     name: Analyze
     runs-on: ubuntu-latest
     permissions:
