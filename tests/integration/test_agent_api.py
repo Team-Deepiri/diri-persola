@@ -157,7 +157,8 @@ class TestInvokeAgent:
 
         mock_llm = MagicMock()
         mock_llm.is_available.return_value = True
-        mock_llm.generate = AsyncMock(return_value="I am a mock response.")
+        # invoke_agent builds a message list and calls chat(), not generate().
+        mock_llm.chat = AsyncMock(return_value="I am a mock response.")
         mock_llm.get_provider_type = MagicMock(return_value="mock")
 
         import persola.api.main as api_module
