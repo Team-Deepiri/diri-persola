@@ -47,6 +47,17 @@ agents = ["langchain-core", "langgraph"]
 persola = "persola.cli.main:cli"
 persola-server = "persola.api.main:main"
 
+[tool.poetry.group.eval]
+# Opt-in: `poetry install --with eval`. The Helox SDK pulls torch, transformers,
+# scikit-learn and friends, which no other part of Persola needs.
+optional = true
+
+[tool.poetry.group.eval.dependencies]
+# TODO: switch to `tag = "v0.3.2"` once diri-helox cuts a tag containing the
+# merged evaluation harness (Team-Deepiri/diri-helox#117). This rev is that
+# PR's merge commit and is the current head of diri-helox main.
+deepiri-helox-sdk = { git = "https://github.com/Team-Deepiri/diri-helox.git", rev = "b836fb8f1b184c49031b8ce413d739ee18338c8d", subdirectory = "helox_sdk" }
+
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8,<10"
 pytest-asyncio = ">=0.24,<2"
