@@ -9,11 +9,28 @@ from ..client import APIClient
 from ..output import print_json
 
 
+_INSTALL_HINT = (
+    "the Helox eval harness is not installed; run 'poetry install --with eval'"
+)
+
+
+def _evaluation_module() -> Any:
+    """Import the Helox evaluation package, or fail with an install hint."""
+    try:
+        import deepiri_helox_sdk.evaluation as eval_pkg
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise click.ClickException(_INSTALL_HINT) from exc
+    return eval_pkg
+
+
+def _harness(eval_dir: Path) -> Any:
+    """Construct an AutomaticEvaluationHarness rooted at ``eval_dir``."""
+    return _evaluation_module().AutomaticEvaluationHarness(eval_dir=eval_dir)
+
+
 def _sdk_suite_dir() -> Path:
     """Path to the sample suites bundled with the Helox SDK."""
-    import deepiri_helox_sdk.evaluation as eval_pkg
-
-    return Path(eval_pkg.__file__).parent / "suites"
+    return Path(_evaluation_module().__file__).parent / "suites"
 
 
 def _agent_subject(client: APIClient, agent_id: str) -> Any:
@@ -24,10 +41,14 @@ def _agent_subject(client: APIClient, agent_id: str) -> Any:
         payload = client.api_request(
             "POST", f"/agents/{agent_id}/invoke", json={"message": prompt}
         )
-        text = payload.get("response")
-        if text is not None:
-            return str(text)
-        return str(payload)
+        text = payload.get("response") if isinstance(payload, dict) else None
+        if text is None:
+            # Returning the raw payload here would feed an API error body into
+            # the grader as if the agent had said it, silently skewing scores.
+            raise click.ClickException(
+                f"agent {agent_id} returned no 'response' field: {payload!r}"
+            )
+        return str(text)
 
     return CallableGenerator(_invoke, name=f"agent:{agent_id}")
 
@@ -86,13 +107,11 @@ def run_eval(
     output_format: str,
 ) -> None:
     """Evaluate an agent or model against a Helox test suite."""
-    from deepiri_helox_sdk.evaluation import AutomaticEvaluationHarness
-
     if bool(agent_id) == bool(model_path):
         raise click.ClickException("provide exactly one of --agent or --model")
 
     client: APIClient = ctx.obj["client"]
-    harness = AutomaticEvaluationHarness(eval_dir=eval_dir)
+    harness = _harness(eval_dir)
     _load_suites(harness, suite_dir or _sdk_suite_dir())
     if suite not in harness.list_suites():
         raise click.ClickException(
@@ -128,10 +147,8 @@ def benchmark(
     eval_dir: Path,
 ) -> None:
     """Benchmark generation latency/throughput for a Persola agent."""
-    from deepiri_helox_sdk.evaluation import AutomaticEvaluationHarness
-
     client: APIClient = ctx.obj["client"]
-    harness = AutomaticEvaluationHarness(eval_dir=eval_dir)
+    harness = _harness(eval_dir)
     stats = harness.benchmark_subject(
         _agent_subject(client, agent_id),
         prompt,
@@ -145,10 +162,7 @@ def benchmark(
 @click.option("--eval-dir", type=click.Path(path_type=Path), default=Path("evaluation"))
 def summary(eval_dir: Path) -> None:
     """Show aggregate evaluation history for the given eval dir."""
-    from deepiri_helox_sdk.evaluation import AutomaticEvaluationHarness
-
-    harness = AutomaticEvaluationHarness(eval_dir=eval_dir)
-    print_json(harness.get_evaluation_summary())
+    print_json(_harness(eval_dir).get_evaluation_summary())
 
 
 @evaluate_group.command("history")
@@ -156,7 +170,4 @@ def summary(eval_dir: Path) -> None:
 @click.option("--eval-dir", type=click.Path(path_type=Path), default=Path("evaluation"))
 def history(suite: str | None, eval_dir: Path) -> None:
     """Show persisted evaluation history."""
-    from deepiri_helox_sdk.evaluation import AutomaticEvaluationHarness
-
-    harness = AutomaticEvaluationHarness(eval_dir=eval_dir)
-    print_json(harness.get_history(suite))
+    print_json(_harness(eval_dir).get_history(suite))
