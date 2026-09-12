@@ -10,6 +10,11 @@ import type {
   Session,
   Message,
   StyleAnalysis,
+  OrgChartResponse,
+  OrgNode,
+  WorkBoard,
+  WorkTask,
+  AuditEvent,
 } from '../types';
 
 const API_BASE = '/api/v1';
@@ -148,6 +153,26 @@ export const cityApi = {
     return `/api/v1/city/events/stream?${q.toString()}`;
   },
   listTools: () => api.get('/city/tools'),
+};
+
+export const workqueueApi = {
+  orgChart: () => api.get<OrgChartResponse>('/workqueue/org-chart'),
+  upsertOrgNode: (node: Partial<OrgNode>) =>
+    api.put<OrgNode>('/workqueue/org-chart/nodes', node),
+  deactivateOrgNode: (role: string) =>
+    api.delete(`/workqueue/org-chart/nodes/${encodeURIComponent(role)}`),
+  board: () => api.get<WorkBoard>('/workqueue/tasks/board'),
+  enqueueTask: (body: {
+    subtask: string;
+    role?: string;
+    origin?: string;
+    session_id?: string;
+  }) => api.post<WorkTask>('/workqueue/tasks', body),
+  getTask: (id: string) => api.get<WorkTask>(`/workqueue/tasks/${encodeURIComponent(id)}`),
+  tickTask: (id: string) =>
+    api.post<WorkTask>(`/workqueue/tasks/${encodeURIComponent(id)}/tick`),
+  audit: (params: { team_id?: string; task_id?: string; session_id?: string; limit?: number } = {}) =>
+    api.get<AuditEvent[]>('/workqueue/audit', { params }),
 };
 
 export default api;

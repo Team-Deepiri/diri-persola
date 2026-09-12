@@ -185,6 +185,66 @@ export interface InvokeResponse {
   message: string;
 }
 
+export type WorkTaskStatus =
+  | 'queued'
+  | 'claimed'
+  | 'in_progress'
+  | 'blocked'
+  | 'done'
+  | 'failed';
+
+export interface OrgNode {
+  role: string;
+  title: string;
+  reports_to: string | null;
+  email: string | null;
+  active: boolean;
+}
+
+export interface OrgChartResponse {
+  team_id: string;
+  top: string | null;
+  nodes: OrgNode[];
+}
+
+export interface WorkTask {
+  task_id: string;
+  team_id: string;
+  role: string;
+  subtask: string;
+  origin: string;
+  status: WorkTaskStatus;
+  result: string | null;
+  error: string | null;
+  parent_task_id: string | null;
+  session_id: string | null;
+  created_at: string;
+  claimed_at: string | null;
+  completed_at: string | null;
+}
+
+export type WorkBoard = Record<WorkTaskStatus, WorkTask[]>;
+
+export type AuditEventType =
+  | 'instruction'
+  | 'decision'
+  | 'reply'
+  | 'status_change'
+  | 'tool_call';
+
+export interface AuditEvent {
+  event_id: string;
+  team_id: string;
+  session_id: string | null;
+  task_id: string | null;
+  event_type: AuditEventType;
+  actor: string;
+  recipient: string | null;
+  summary: string;
+  detail: Record<string, unknown>;
+  at: string;
+}
+
 export const PANELS = ['Creativity', 'Personality', 'Thinking', 'Reliability'] as const;
 export type PanelName = typeof PANELS[number];
 
